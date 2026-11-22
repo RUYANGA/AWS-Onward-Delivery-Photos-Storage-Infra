@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Onward Logistics - delivery photos. Recovery Region stack: the replica bucket that receives
+  every photo, thumbnail and metadata sidecar through S3 Cross-Region Replication.
+  Deploy this stack before the platform stack; replication requires the destination to exist.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: onward
+    AllowedPattern: "^[a-z][a-z0-9-]{1,15}$"
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+  PrimaryRegion:
+    Type: String
+    Default: eu-west-1
+    Description: Region that runs the platform stack and replicates into this bucket.
+  NoncurrentVersionRetentionDays:
+    Type: Number
+    Default: 365
+    MinValue: 30
+    Description: How long overwritten versions are kept in the replica.
+
+Resources:
+  ReplicaBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-photos-replica-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-noncurrent-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: !Ref NoncurrentVersionRetentionDays
+          - Id: abort-incomplete-multipart-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-photos-replica"
+        - Key: ReplicaOf
+          Value: !Sub "${ProjectName}-${Environment}-photos-${AWS::AccountId}-${PrimaryRegion}"
+
+  ReplicaBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ReplicaBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - "s3:*"
+            Resource:
+              - !GetAtt ReplicaBucket.Arn
+              - !Sub "${ReplicaBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+          - Sid: DenyPermanentVersionDeletion
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - s3:DeleteObjectVersion
+            Resource: !Sub "${ReplicaBucket.Arn}/*"
+          - Sid: DenyBucketDeletion
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - s3:DeleteBucket
+            Resource: !GetAtt ReplicaBucket.Arn
+
+Outputs:
+  ReplicaBucketName:
+    Value: !Ref ReplicaBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-ReplicaBucketName"
+  ReplicaBucketArn:
+    Value: !GetAtt ReplicaBucket.Arn
