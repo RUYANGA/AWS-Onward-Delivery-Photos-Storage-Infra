@@ -9,6 +9,12 @@ PRIMARY_REGION="${PRIMARY_REGION:-eu-west-1}"
 DR_REGION="${DR_REGION:-eu-central-1}"
 GITHUB_OWNER="${GITHUB_OWNER:-RUYANGA}"
 REPO_NAME="${REPO_NAME:-AWS-Onward-Delivery-Photos-Storage-Infra}"
+APP_REPO_NAME="${APP_REPO_NAME:-onward-delivery-photos-app}"
+# GitHub's immutable OIDC subject pins numeric IDs; looked up with gh when not given.
+github_id() { gh api "$1" -q .id 2>/dev/null | grep -E '^[0-9]+$' || true; }  # empty if missing
+GITHUB_OWNER_ID="${GITHUB_OWNER_ID:-$(github_id "users/$GITHUB_OWNER")}"
+REPO_ID="${REPO_ID:-$(github_id "repos/$GITHUB_OWNER/$REPO_NAME")}"
+APP_REPO_ID="${APP_REPO_ID:-$(github_id "repos/$GITHUB_OWNER/$APP_REPO_NAME")}"
 # Reuse AVAILABLE GitHub connections instead of creating onward-<env>-github (skips the console step).
 # Connections are Regional, so each Region needs its own:
 #   PRIMARY_CONNECTION_ARN=arn:aws:codeconnections:eu-west-1:... DR_CONNECTION_ARN=arn:aws:codeconnections:eu-central-1:... \
@@ -72,6 +78,7 @@ deploy_bootstrap() {
     --template-file "$ROOT/bootstrap/bootstrap.yaml" --capabilities CAPABILITY_NAMED_IAM \
     --no-fail-on-empty-changeset --tags "${TAGS[@]}" \
     --parameter-overrides "ProjectName=$PROJECT" "Environment=$ENVIRONMENT" "StackRole=$role" \
-      "GitHubOwner=${GITHUB_OWNER,,}" "RepoName=$REPO_NAME" "ConnectionReady=$ready" \
+      "GitHubOwner=${GITHUB_OWNER,,}" "RepoName=$REPO_NAME" "AppRepoName=$APP_REPO_NAME" \
+      "GitHubOwnerId=$GITHUB_OWNER_ID" "RepoId=$REPO_ID" "AppRepoId=$APP_REPO_ID" "ConnectionReady=$ready" \
       "ExistingConnectionArn=$connection" "$@"
 }

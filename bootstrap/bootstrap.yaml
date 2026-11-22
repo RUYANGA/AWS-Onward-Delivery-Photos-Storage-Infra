@@ -39,6 +39,23 @@ Parameters:
   Branch:
     Type: String
     Default: main
+  GitHubOwnerId:
+    Type: String
+    Default: ""
+    AllowedPattern: ^[0-9]*$
+    Description: >-
+      Numeric GitHub owner ID. Repositories using GitHub's immutable OIDC subject send
+      repo:<owner>@<owner-id>/<repo>@<repo-id>:...; scripts/bootstrap.sh looks the IDs up with gh.
+  RepoId:
+    Type: String
+    Default: ""
+    AllowedPattern: ^[0-9]*$
+    Description: Numeric ID of the infra repository (immutable OIDC subject).
+  AppRepoId:
+    Type: String
+    Default: ""
+    AllowedPattern: ^[0-9]*$
+    Description: Numeric ID of the app repository (immutable OIDC subject). Empty until it exists.
   ConnectionReady:
     Type: String
     AllowedValues:
@@ -97,6 +114,24 @@ Conditions:
     - !Equals
       - !Ref PipelineReady
       - "true"
+  InfraImmutableSubject: !And
+    - !Not
+      - !Equals
+        - !Ref GitHubOwnerId
+        - ""
+    - !Not
+      - !Equals
+        - !Ref RepoId
+        - ""
+  AppImmutableSubject: !And
+    - !Not
+      - !Equals
+        - !Ref GitHubOwnerId
+        - ""
+    - !Not
+      - !Equals
+        - !Ref AppRepoId
+        - ""
   CreateOidc: !And
     - !Condition IsPrimary
     - !Equals
@@ -556,8 +591,14 @@ Resources:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
               # GitHubOwner is lowercase (the repository link requires it); the token keeps GitHub's case.
+              # Both subject formats: classic, and GitHub's immutable one that also pins the IDs.
               StringEqualsIgnoreCase:
-                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubOwner}/${AppRepoName}:ref:refs/heads/${Branch}"
+                token.actions.githubusercontent.com:sub:
+                  - !Sub "repo:${GitHubOwner}/${AppRepoName}:ref:refs/heads/${Branch}"
+                  - !If
+                    - AppImmutableSubject
+                    - !Sub "repo:${GitHubOwner}@${GitHubOwnerId}/${AppRepoName}@${AppRepoId}:ref:refs/heads/${Branch}"
+                    - !Ref AWS::NoValue
       ManagedPolicyArns:
         - !Ref AppImagePushPolicy
 
@@ -607,6 +648,14 @@ Resources:
                 token.actions.githubusercontent.com:sub:
                   - !Sub "repo:${GitHubOwner}/${RepoName}:pull_request"
                   - !Sub "repo:${GitHubOwner}/${RepoName}:ref:refs/heads/${Branch}"
+                  - !If
+                    - InfraImmutableSubject
+                    - !Sub "repo:${GitHubOwner}@${GitHubOwnerId}/${RepoName}@${RepoId}:pull_request"
+                    - !Ref AWS::NoValue
+                  - !If
+                    - InfraImmutableSubject
+                    - !Sub "repo:${GitHubOwner}@${GitHubOwnerId}/${RepoName}@${RepoId}:ref:refs/heads/${Branch}"
+                    - !Ref AWS::NoValue
       ManagedPolicyArns:
         - !Ref NestedTemplatesPublishPolicy
 
