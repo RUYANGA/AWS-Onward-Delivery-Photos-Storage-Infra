@@ -1,0 +1,18 @@
+# Git sync deployment file for stack onward-dev-pipeline (eu-west-1).
+# Releases the app: a push of :latest to ECR (by the app's GitHub Actions) starts a
+# CodeDeploy blue/green release of the ECS service.
+template-file-path: templates/pipeline.yaml
+parameters:
+  ProjectName: onward
+  Environment: dev
+  ReleaseImageTag: latest
+  DeployBundleKey: deploy/deploy-bundle.zip
+  DeploymentConfig: CodeDeployDefault.ECSAllAtOnce   # or ECSCanary10Percent5Minutes: 10% of traffic first
+  KeepOldVersionMinutes: "15"
+tags:
+  Project: onward-delivery-photos
+  Environment: dev
+  Owner: platform-team
+  CostCenter: logistics-proof-of-delivery
+  DataClassification: confidential
+  ManagedBy: cloudformation-gitsync
