@@ -44,10 +44,21 @@ connection_ready() {
   echo "$arn"
 }
 
+# current <region> <parameter>: the bootstrap stack's current value ("true" only if it is true).
+# Re-running the connection phase (e.g. to apply a bootstrap change) must not turn Git sync off;
+# only teardown.sh does that.
+current() {
+  local value
+  value="$(aws cloudformation describe-stacks --region "$1" --stack-name "$BOOTSTRAP_STACK" \
+    --query "Stacks[0].Parameters[?ParameterKey=='$2'].ParameterValue" --output text 2>/dev/null || true)"
+  [[ "$value" == true ]] && echo true || echo false
+}
+
 # shellcheck disable=SC2046  # oidc_overrides prints several KEY=VALUE words on purpose
 if [[ $phase == connection ]]; then
-  deploy_bootstrap "$DR_REGION" dr false "$DR_CONNECTION_ARN"
-  deploy_bootstrap "$PRIMARY_REGION" primary false "$PRIMARY_CONNECTION_ARN" PipelineReady=false $(oidc_overrides)
+  deploy_bootstrap "$DR_REGION" dr "$(current "$DR_REGION" ConnectionReady)" "$DR_CONNECTION_ARN"
+  deploy_bootstrap "$PRIMARY_REGION" primary "$(current "$PRIMARY_REGION" ConnectionReady)" "$PRIMARY_CONNECTION_ARN" \
+    PipelineReady="$(current "$PRIMARY_REGION" PipelineReady)" $(oidc_overrides)
   say "Next steps"
   [[ -z "$DR_CONNECTION_ARN$PRIMARY_CONNECTION_ARN" ]] && \
     echo "1. Authorise both connections: Console > Developer Tools > Settings > Connections > $PROJECT-$ENVIRONMENT-github > Update pending connection (in $DR_REGION and $PRIMARY_REGION)."
