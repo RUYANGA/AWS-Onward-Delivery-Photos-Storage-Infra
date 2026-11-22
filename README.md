@@ -41,6 +41,7 @@ templates/application.yaml        nested: ECS Fargate, IAM roles, Parameter Stor
 templates/gitsync-placeholder.yaml  empty stack Git sync can update (created by bootstrap.sh)
 deployments/dev/*.yaml          Git sync deployment files: parameters and tags per stack
 scripts/bootstrap.sh            build or rebuild from scratch
+scripts/deploy-direct.sh        deploy the stacks with the CLI while Git sync waits for connection approval
 scripts/teardown.sh             delete after a demo (cost control)
 scripts/check_standards.sh      no inline policies, IAM users, keys or SSH; deployment files valid (also in CI)
 scripts/nested-templates.sh     version / check / publish the nested templates
@@ -138,6 +139,11 @@ skip the console. Connections are Regional, so pass one per Region:
 aws codeconnections list-connections --region eu-west-1 --query 'Connections[].[ConnectionName,ConnectionStatus,ConnectionArn]'
 PRIMARY_CONNECTION_ARN=<eu-west-1 arn> DR_CONNECTION_ARN=<eu-central-1 arn> ./scripts/bootstrap.sh sync
 ```
+
+**Connections not approved yet?** `./scripts/deploy-direct.sh` deploys the same stacks with the
+AWS CLI from the same `deployments/dev/*.yaml` files (replica, platform, then the pipeline once a
+deploy bundle exists). After the connections are approved, `./scripts/bootstrap.sh sync` turns Git
+sync on and it adopts those stacks unchanged.
 
 From then on, every commit that changes a template or a file in `deployments/dev/` updates its stack automatically.
 
