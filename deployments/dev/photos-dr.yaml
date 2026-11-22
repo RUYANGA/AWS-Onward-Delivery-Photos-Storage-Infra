@@ -1,0 +1,14 @@
+# Git sync deployment file for stack onward-dev-photos-dr (eu-central-1).
+template-file-path: templates/photos-dr.yaml
+parameters:
+  ProjectName: onward
+  Environment: dev
+  PrimaryRegion: eu-west-1
+  NoncurrentVersionRetentionDays: "365"
+tags:
+  Project: onward-delivery-photos
+  Environment: dev
+  Owner: platform-team
+  CostCenter: logistics-proof-of-delivery
+  DataClassification: confidential
+  ManagedBy: cloudformation-gitsync
