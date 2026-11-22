@@ -1,0 +1,303 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Onward Logistics - delivery photos | ROOT stack for the primary Region.
+  Composes five nested stacks, one per domain: network, database, edge, storage and
+  application. CloudFront is the only public entry point. No inline IAM policies anywhere.
+
+# =============================================================================
+#  Stack layout (deployment order)                      templates/<name>.yaml
+#
+#    NetworkStack      VPC, subnets, security groups, VPC endpoints,
+#                      ALB + blue/green target groups + WAF origin lock    <- (none)
+#    DatabaseStack     Multi-AZ RDS for PostgreSQL                         <- network
+#    EdgeStack         CloudFront, OAC, response header policies           <- network
+#    StorageStack      photo bucket, replication, bucket policy            <- edge
+#    ApplicationStack  ECS, IAM, Parameter Store config, release alarms    <- network, database, storage
+#
+#  The photo bucket's name is computed once here (PhotoBucketName below) and passed to
+#  the stacks that need it before the bucket exists. That lets CloudFront be created
+#  first and the storage stack own its bucket policy, which must name the distribution.
+#
+#  Child templates are read from S3, not from Git. CI uploads them to
+#    s3://<project>-<env>-cfn-templates-<account>-<region>/platform/<NestedTemplatesVersion>/
+#  where the version is a content hash (scripts/nested-templates.sh). Bumping it in
+#  deployments/<env>/platform.yaml is what rolls out a change to a nested template.
+# =============================================================================
+
+# =============================================================================
+# Parameters
+# =============================================================================
+Parameters:
+  # ---------------------------------------------------------------- Naming
+  ProjectName:
+    Type: String
+    Default: onward
+    AllowedPattern: "^[a-z][a-z0-9-]{1,15}$"
+    Description: Short project prefix used in every resource name.
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+
+  # ------------------------------------------------------ Nested templates
+  NestedTemplatesVersion:
+    Type: String
+    AllowedPattern: "^[0-9a-f]{12}$"
+    Description: >-
+      Content hash of the nested templates. Print it with
+      ./scripts/nested-templates.sh version
+
+  # --------------------------------------------------------------- Network
+  VpcCidr:
+    Type: String
+    Default: 10.20.0.0/16
+  PublicSubnetACidr:
+    Type: String
+    Default: 10.20.0.0/24
+  PublicSubnetBCidr:
+    Type: String
+    Default: 10.20.1.0/24
+  AppSubnetACidr:
+    Type: String
+    Default: 10.20.10.0/24
+  AppSubnetBCidr:
+    Type: String
+    Default: 10.20.11.0/24
+  DataSubnetACidr:
+    Type: String
+    Default: 10.20.20.0/24
+  DataSubnetBCidr:
+    Type: String
+    Default: 10.20.21.0/24
+  CloudFrontOriginPrefixListId:
+    Type: String
+    Description: >-
+      ID of the AWS managed prefix list com.amazonaws.global.cloudfront.origin-facing in this Region.
+      Look it up with: aws ec2 describe-managed-prefix-lists
+      --filters Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing
+    AllowedPattern: "^pl-[0-9a-f]+$"
+
+  # --------------------------------------------------------- Photo storage
+  DrRegion:
+    Type: String
+    Default: eu-central-1
+    Description: Region holding the replica bucket (stack <project>-<env>-photos-dr).
+  NoncurrentVersionRetentionDays:
+    Type: Number
+    Default: 90
+    MinValue: 7
+
+  # -------------------------------------------------------------- Database
+  DbInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+  DbEngineVersion:
+    Type: String
+    Default: "16"
+  DbAllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+  DbBackupRetentionDays:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    MaxValue: 35
+  DbDeletionProtection:
+    Type: String
+    AllowedValues:
+      - "true"
+      - "false"
+    Default: "true"
+
+  # ----------------------------------------------------------- Application
+  ImageTag:
+    Type: String
+    Default: latest
+    Description: >-
+      Image the service starts with when the stack is first created. After that CodeDeploy
+      owns the running image (releases come from templates/pipeline.yaml).
+  EcrRepositoryName:
+    Type: String
+    Default: onward-dev/delivery-photos-app
+  TaskCpu:
+    Type: String
+    Default: "512"
+    AllowedValues:
+      - "256"
+      - "512"
+      - "1024"
+      - "2048"
+  TaskMemory:
+    Type: String
+    Default: "1024"
+  DesiredCount:
+    Type: Number
+    Default: 2
+    MinValue: 2
+  MinTasks:
+    Type: Number
+    Default: 2
+    MinValue: 2
+  MaxTasks:
+    Type: Number
+    Default: 6
+  MaxUploadMb:
+    Type: Number
+    Default: 15
+  StudentFullName:
+    Type: String
+    Description: Shown on the About page.
+  LabName:
+    Type: String
+    Default: "Storing and Serving Delivery Photos for Onward Logistics"
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues:
+      - 7
+      - 14
+      - 30
+      - 60
+      - 90
+      - 180
+      - 365
+
+  # ------------------------------------------------------ Content delivery
+  CloudFrontPriceClass:
+    Type: String
+    Default: PriceClass_200
+    AllowedValues:
+      - PriceClass_100
+      - PriceClass_200
+      - PriceClass_All
+
+# =============================================================================
+# Nested stacks (listed in deployment order)
+# =============================================================================
+Resources:
+  NetworkStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "https://${ProjectName}-${Environment}-cfn-templates-${AWS::AccountId}-${AWS::Region}.s3.${AWS::Region}.${AWS::URLSuffix}/platform/${NestedTemplatesVersion}/network.yaml"
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        VpcCidr: !Ref VpcCidr
+        PublicSubnetACidr: !Ref PublicSubnetACidr
+        PublicSubnetBCidr: !Ref PublicSubnetBCidr
+        AppSubnetACidr: !Ref AppSubnetACidr
+        AppSubnetBCidr: !Ref AppSubnetBCidr
+        DataSubnetACidr: !Ref DataSubnetACidr
+        DataSubnetBCidr: !Ref DataSubnetBCidr
+        CloudFrontOriginPrefixListId: !Ref CloudFrontOriginPrefixListId
+        PhotoBucketName: !Sub "${ProjectName}-${Environment}-photos-${AWS::AccountId}-${AWS::Region}"
+
+  DatabaseStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "https://${ProjectName}-${Environment}-cfn-templates-${AWS::AccountId}-${AWS::Region}.s3.${AWS::Region}.${AWS::URLSuffix}/platform/${NestedTemplatesVersion}/database.yaml"
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        DataSubnetIds: !GetAtt NetworkStack.Outputs.DataSubnetIds
+        DatabaseSecurityGroupId: !GetAtt NetworkStack.Outputs.DatabaseSecurityGroupId
+        DbInstanceClass: !Ref DbInstanceClass
+        DbEngineVersion: !Ref DbEngineVersion
+        DbAllocatedStorage: !Ref DbAllocatedStorage
+        DbBackupRetentionDays: !Ref DbBackupRetentionDays
+        DbDeletionProtection: !Ref DbDeletionProtection
+
+  EdgeStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "https://${ProjectName}-${Environment}-cfn-templates-${AWS::AccountId}-${AWS::Region}.s3.${AWS::Region}.${AWS::URLSuffix}/platform/${NestedTemplatesVersion}/edge.yaml"
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        CloudFrontPriceClass: !Ref CloudFrontPriceClass
+        LoadBalancerDnsName: !GetAtt NetworkStack.Outputs.LoadBalancerDnsName
+        OriginVerifySecretArn: !GetAtt NetworkStack.Outputs.OriginVerifySecretArn
+        PhotoBucketName: !Sub "${ProjectName}-${Environment}-photos-${AWS::AccountId}-${AWS::Region}"
+
+  StorageStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "https://${ProjectName}-${Environment}-cfn-templates-${AWS::AccountId}-${AWS::Region}.s3.${AWS::Region}.${AWS::URLSuffix}/platform/${NestedTemplatesVersion}/storage.yaml"
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        DrRegion: !Ref DrRegion
+        NoncurrentVersionRetentionDays: !Ref NoncurrentVersionRetentionDays
+        PhotoBucketName: !Sub "${ProjectName}-${Environment}-photos-${AWS::AccountId}-${AWS::Region}"
+        DistributionId: !GetAtt EdgeStack.Outputs.DistributionId
+
+  ApplicationStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "https://${ProjectName}-${Environment}-cfn-templates-${AWS::AccountId}-${AWS::Region}.s3.${AWS::Region}.${AWS::URLSuffix}/platform/${NestedTemplatesVersion}/application.yaml"
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        # network
+        AppSubnetIds: !GetAtt NetworkStack.Outputs.AppSubnetIds
+        AppSecurityGroupId: !GetAtt NetworkStack.Outputs.AppSecurityGroupId
+        BlueTargetGroupArn: !GetAtt NetworkStack.Outputs.BlueTargetGroupArn
+        LoadBalancerFullName: !GetAtt NetworkStack.Outputs.LoadBalancerFullName
+        BlueTargetGroupFullName: !GetAtt NetworkStack.Outputs.BlueTargetGroupFullName
+        GreenTargetGroupFullName: !GetAtt NetworkStack.Outputs.GreenTargetGroupFullName
+        # storage
+        PhotoBucketName: !GetAtt StorageStack.Outputs.PhotoBucketName
+        PhotoBucketArn: !GetAtt StorageStack.Outputs.PhotoBucketArn
+        # database
+        DatabaseEndpointAddress: !GetAtt DatabaseStack.Outputs.DatabaseEndpointAddress
+        DatabaseEndpointPort: !GetAtt DatabaseStack.Outputs.DatabaseEndpointPort
+        DatabaseName: !GetAtt DatabaseStack.Outputs.DatabaseName
+        DatabaseSecretArn: !GetAtt DatabaseStack.Outputs.DatabaseSecretArn
+        # container and scaling
+        ImageTag: !Ref ImageTag
+        EcrRepositoryName: !Ref EcrRepositoryName
+        TaskCpu: !Ref TaskCpu
+        TaskMemory: !Ref TaskMemory
+        DesiredCount: !Ref DesiredCount
+        MinTasks: !Ref MinTasks
+        MaxTasks: !Ref MaxTasks
+        LogRetentionDays: !Ref LogRetentionDays
+        # configuration (.env in Parameter Store)
+        MaxUploadMb: !Ref MaxUploadMb
+        StudentFullName: !Ref StudentFullName
+        LabName: !Ref LabName
+
+# =============================================================================
+# Outputs (unchanged names: scripts/live-review-checks.sh reads these)
+# =============================================================================
+Outputs:
+  ApplicationUrl:
+    Description: The only public URL for the Onward delivery photos service.
+    Value: !Sub "https://${EdgeStack.Outputs.DistributionDomainName}"
+  DistributionId:
+    Value: !GetAtt EdgeStack.Outputs.DistributionId
+  LoadBalancerDnsName:
+    Description: Direct requests here return 403 (proof that only CloudFront can reach the ALB).
+    Value: !GetAtt NetworkStack.Outputs.LoadBalancerDnsName
+  PhotoBucketName:
+    Value: !GetAtt StorageStack.Outputs.PhotoBucketName
+  ReplicaBucketName:
+    Value: !GetAtt StorageStack.Outputs.ReplicaBucketName
+  DatabaseEndpoint:
+    Description: Private address; not reachable from the internet.
+    Value: !GetAtt DatabaseStack.Outputs.DatabaseEndpointAddress
+  DatabaseSecretArn:
+    Value: !GetAtt DatabaseStack.Outputs.DatabaseSecretArn
+  ClusterName:
+    Value: !GetAtt ApplicationStack.Outputs.ClusterName
+  ServiceName:
+    Value: !GetAtt ApplicationStack.Outputs.ServiceName
+  AppLogGroupName:
+    Value: !GetAtt ApplicationStack.Outputs.AppLogGroupName
+  AppConfigPath:
+    Description: Parameter Store path that holds the app's .env values.
+    Value: !GetAtt ApplicationStack.Outputs.AppConfigPath

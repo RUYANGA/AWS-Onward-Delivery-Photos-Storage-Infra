@@ -1,0 +1,184 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Onward Logistics - delivery photos | Nested stack: STORAGE.
+  Private, versioned photo bucket that replicates every object to the recovery Region, and
+  its bucket policy: only Onward's CloudFront distribution may read /media/*, HTTPS only,
+  no permanent version deletes and no bucket deletion.
+
+# -----------------------------------------------------------------------------
+# Inputs
+# -----------------------------------------------------------------------------
+Parameters:
+  ProjectName:
+    Type: String
+    Description: Short project prefix used in every resource name.
+  Environment:
+    Type: String
+    Description: Deployment environment (dev, staging or prod).
+  DrRegion:
+    Type: String
+    Description: Region that holds the replica bucket (stack <project>-<env>-photos-dr).
+  NoncurrentVersionRetentionDays:
+    Type: Number
+    Description: Days an overwritten or deleted photo version is kept before it expires.
+  PhotoBucketName:
+    Type: String
+    Description: Computed once in the root stack, so CloudFront can be created before the bucket.
+  DistributionId:
+    Type: String
+    Description: The only CloudFront distribution allowed to read photos (from the edge stack).
+
+Resources:
+  # ===========================================================================
+  # Photo bucket: private, versioned, encrypted, replicated to the DR Region
+  # ===========================================================================
+  PhotoBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref PhotoBucketName
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-noncurrent-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: !Ref NoncurrentVersionRetentionDays
+          - Id: abort-incomplete-multipart-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      ReplicationConfiguration:
+        Role: !GetAtt ReplicationRole.Arn
+        Rules:
+          - Id: replicate-everything-to-dr
+            Status: Enabled
+            Priority: 1
+            Filter:
+              Prefix: ""
+            DeleteMarkerReplication:
+              Status: Disabled   # a delete in the primary never hides the replica copy
+            Destination:
+              Bucket: !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-${Environment}-photos-replica-${AWS::AccountId}-${DrRegion}"
+              StorageClass: GLACIER_IR
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-photos"
+
+  # ===========================================================================
+  # Replication identity (customer managed policy, no inline policies)
+  # ===========================================================================
+  ReplicationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Used by S3 to replicate delivery photos to the DR Region.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: s3.amazonaws.com
+            Action:
+              - sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Ref ReplicationPolicy
+
+  # The bucket name comes from the parameter (not !Ref PhotoBucket) to avoid a bucket <-> role cycle.
+  ReplicationPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Read versions from the primary photo bucket and write replicas to the DR bucket.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SourceBucket
+            Effect: Allow
+            Action:
+              - s3:GetReplicationConfiguration
+              - s3:ListBucket
+            Resource: !Sub "arn:${AWS::Partition}:s3:::${PhotoBucketName}"
+          - Sid: SourceObjects
+            Effect: Allow
+            Action:
+              - s3:GetObjectVersionForReplication
+              - s3:GetObjectVersionAcl
+              - s3:GetObjectVersionTagging
+            Resource: !Sub "arn:${AWS::Partition}:s3:::${PhotoBucketName}/*"
+          - Sid: DestinationObjects
+            Effect: Allow
+            Action:
+              - s3:ReplicateObject
+              - s3:ReplicateTags
+            Resource: !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-${Environment}-photos-replica-${AWS::AccountId}-${DrRegion}/*"
+
+  # ===========================================================================
+  # Bucket policy: reads only through Onward's CloudFront (OAC); evidence cannot be destroyed
+  # ===========================================================================
+  PhotoBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PhotoBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowOnlyOnwardCloudFrontToReadMedia
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action:
+              - s3:GetObject
+            Resource: !Sub "${PhotoBucket.Arn}/media/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${DistributionId}"
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - "s3:*"
+            Resource:
+              - !GetAtt PhotoBucket.Arn
+              - !Sub "${PhotoBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+          - Sid: DenyPermanentVersionDeletion
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - s3:DeleteObjectVersion
+            Resource: !Sub "${PhotoBucket.Arn}/*"
+          - Sid: DenyBucketDeletion
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - s3:DeleteBucket
+            Resource: !GetAtt PhotoBucket.Arn
+
+# -----------------------------------------------------------------------------
+# Outputs (consumed by the application stack and the root stack)
+# -----------------------------------------------------------------------------
+Outputs:
+  PhotoBucketName:
+    Value: !Ref PhotoBucket
+  PhotoBucketArn:
+    Value: !GetAtt PhotoBucket.Arn
+  ReplicaBucketName:
+    Value: !Sub "${ProjectName}-${Environment}-photos-replica-${AWS::AccountId}-${DrRegion}"

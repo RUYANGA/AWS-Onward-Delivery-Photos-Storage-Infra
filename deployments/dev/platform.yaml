@@ -1,0 +1,26 @@
+# Git sync deployment file for stack onward-dev-platform (eu-west-1).
+# ImageTag is used only when the stack is first created; app releases go through CodePipeline + CodeDeploy.
+template-file-path: templates/platform.yaml
+parameters:
+  ProjectName: onward
+  Environment: dev
+  NestedTemplatesVersion: "29af3616c8c2"   # ./scripts/nested-templates.sh version (CI fails if stale)
+  DrRegion: eu-central-1
+  CloudFrontOriginPrefixListId: pl-4fa04526   # com.amazonaws.global.cloudfront.origin-facing in eu-west-1; verify in your account
+  EcrRepositoryName: onward-dev/delivery-photos-app
+  ImageTag: latest
+  StudentFullName: "Merci RUYANGA"
+  LabName: "Storing and Serving Delivery Photos for Onward Logistics"
+  DesiredCount: "2"
+  MinTasks: "2"
+  MaxTasks: "6"
+  DbInstanceClass: db.t4g.micro
+  DbDeletionProtection: "true"
+  CloudFrontPriceClass: PriceClass_200
+tags:
+  Project: onward-delivery-photos
+  Environment: dev
+  Owner: platform-team
+  CostCenter: logistics-proof-of-delivery
+  DataClassification: confidential
+  ManagedBy: cloudformation-gitsync

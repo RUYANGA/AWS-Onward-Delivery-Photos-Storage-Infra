@@ -1,0 +1,106 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Onward Logistics - delivery photos | Nested stack: DATABASE.
+  Multi-AZ RDS for PostgreSQL in the isolated data subnets. RDS generates, stores and
+  rotates the master password in Secrets Manager; no credential appears in this repository.
+
+# -----------------------------------------------------------------------------
+# Inputs
+# -----------------------------------------------------------------------------
+Parameters:
+  ProjectName:
+    Type: String
+    Description: Short project prefix used in every resource name.
+  Environment:
+    Type: String
+    Description: Deployment environment (dev, staging or prod).
+  DataSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Isolated data subnets (two AZs) from the network stack.
+  DatabaseSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group that admits PostgreSQL from the app tasks only.
+  DbInstanceClass:
+    Type: String
+    Description: RDS instance class.
+  DbEngineVersion:
+    Type: String
+    Description: PostgreSQL major version.
+  DbAllocatedStorage:
+    Type: Number
+    Description: Initial storage in GiB (grows automatically up to 100 GiB).
+  DbBackupRetentionDays:
+    Type: Number
+    Description: Days automated backups are kept.
+  DbDeletionProtection:
+    Type: String
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Blocks deletion of the instance while true.
+
+Conditions:
+  ProtectDatabase: !Equals
+    - !Ref DbDeletionProtection
+    - "true"
+
+Resources:
+  # ===========================================================================
+  # PostgreSQL photo catalogue
+  # ===========================================================================
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Isolated data subnets for the photo catalogue
+      SubnetIds: !Ref DataSubnetIds
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub "${ProjectName}-${Environment}-photos-db"
+      Engine: postgres
+      EngineVersion: !Ref DbEngineVersion
+      DBInstanceClass: !Ref DbInstanceClass
+      DBName: photos
+      MasterUsername: onward_app
+      ManageMasterUserPassword: true          # RDS generates, stores and rotates it in Secrets Manager
+      AllocatedStorage: !Ref DbAllocatedStorage
+      MaxAllocatedStorage: 100
+      StorageType: gp3
+      StorageEncrypted: true
+      MultiAZ: true
+      PubliclyAccessible: false
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroupId
+      BackupRetentionPeriod: !Ref DbBackupRetentionDays
+      PreferredBackupWindow: "01:00-02:00"
+      PreferredMaintenanceWindow: "sun:02:30-sun:03:30"
+      CopyTagsToSnapshot: true
+      AutoMinorVersionUpgrade: true
+      DeletionProtection: !If
+        - ProtectDatabase
+        - true
+        - false
+      EnableCloudwatchLogsExports:
+        - postgresql
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-photos-db"
+
+# -----------------------------------------------------------------------------
+# Outputs (consumed by the application stack)
+# -----------------------------------------------------------------------------
+Outputs:
+  DatabaseEndpointAddress:
+    Description: Private address; not reachable from the internet.
+    Value: !GetAtt Database.Endpoint.Address
+  DatabaseEndpointPort:
+    Value: !GetAtt Database.Endpoint.Port
+  DatabaseName:
+    Value: photos
+  DatabaseSecretArn:
+    Description: RDS-managed secret holding the master username and password.
+    Value: !GetAtt Database.MasterUserSecret.SecretArn

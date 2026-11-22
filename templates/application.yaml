@@ -1,0 +1,460 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Onward Logistics - delivery photos | Nested stack: APPLICATION.
+  ECS Fargate service in the private app subnets, released blue/green by CodeDeploy
+  (templates/pipeline.yaml), with its configuration in SSM Parameter Store and the alarms
+  CodeDeploy watches during a release.
+
+Parameters:
+  ProjectName:
+    Type: String
+  Environment:
+    Type: String
+  AppSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnets for the Fargate tasks.
+  AppSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  BlueTargetGroupArn:
+    Type: String
+    Description: Target group the service starts in (from the network stack).
+  LoadBalancerFullName:
+    Type: String
+  BlueTargetGroupFullName:
+    Type: String
+  GreenTargetGroupFullName:
+    Type: String
+  PhotoBucketName:
+    Type: String
+  PhotoBucketArn:
+    Type: String
+  DatabaseEndpointAddress:
+    Type: String
+  DatabaseEndpointPort:
+    Type: String
+  DatabaseName:
+    Type: String
+  DatabaseSecretArn:
+    Type: String
+    Description: RDS-managed master user secret.
+  ImageTag:
+    Type: String
+    Description: Only used when the stack is first created. After that CodeDeploy owns the running image.
+  EcrRepositoryName:
+    Type: String
+  TaskCpu:
+    Type: String
+  TaskMemory:
+    Type: String
+  DesiredCount:
+    Type: Number
+  MinTasks:
+    Type: Number
+  MaxTasks:
+    Type: Number
+  LogRetentionDays:
+    Type: Number
+  MaxUploadMb:
+    Type: Number
+  StudentFullName:
+    Type: String
+  LabName:
+    Type: String
+
+Resources:
+  # ===========================================================================
+  # Cluster and logging
+  # ===========================================================================
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "${ProjectName}-${Environment}-cluster"
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  AppLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/${ProjectName}-${Environment}/delivery-photos-app"
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ===========================================================================
+  # IAM: execution role (ECS agent) and task role (running app)
+  # Customer managed policies only, no inline policies.
+  # ===========================================================================
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Lets ECS pull the image, write logs, and read the app configuration and database secret.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+        - !Ref TaskExecutionSecretsPolicy
+
+  TaskExecutionSecretsPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Read the app's .env parameters and the RDS-managed master user secret - nothing else.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ReadAppConfiguration
+            Effect: Allow
+            Action:
+              - ssm:GetParameters
+            Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${Environment}/app/*"
+          - Sid: ReadDatabaseSecret
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: !Ref DatabaseSecretArn
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Identity of the running application.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Ref TaskPhotoBucketPolicy
+
+  TaskPhotoBucketPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: >-
+        Write photos and metadata sidecars, read photos. No delete permission:
+        the application can never destroy evidence.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: WritePhotosAndSidecars
+            Effect: Allow
+            Action:
+              - s3:PutObject
+            Resource:
+              - !Sub "${PhotoBucketArn}/media/*"
+              - !Sub "${PhotoBucketArn}/meta/*"
+          - Sid: ReadPhotosAndSidecars
+            Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource:
+              - !Sub "${PhotoBucketArn}/media/*"
+              - !Sub "${PhotoBucketArn}/meta/*"
+
+  # ===========================================================================
+  # Configuration (.env) in SSM Parameter Store
+  # One String parameter per variable under /<project>/<env>/app/. ECS reads them when a
+  # task starts, so changing a value needs no new task definition. DB_USERNAME and
+  # DB_PASSWORD stay in the RDS-managed secret in Secrets Manager, which rotates them.
+  # ===========================================================================
+  AppConfigAwsRegion:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/app/AWS_REGION"
+      Type: String
+      Value: !Ref AWS::Region
+      Description: Region of the photo bucket.
+
+  AppConfigPhotoBucket:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/app/PHOTO_BUCKET"
+      Type: String
+      Value: !Ref PhotoBucketName
+      Description: Private bucket that holds photos, thumbnails and metadata sidecars.
+
+  AppConfigDbHost:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/app/DB_HOST"
+      Type: String
+      Value: !Ref DatabaseEndpointAddress
+      Description: Private RDS endpoint.
+
+  AppConfigDbPort:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/app/DB_PORT"
+      Type: String
+      Value: !Ref DatabaseEndpointPort
+      Description: PostgreSQL port.
+
+  AppConfigDbName:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/app/DB_NAME"
+      Type: String
+      Value: !Ref DatabaseName
+      Description: Database name.
+
+  AppConfigDbSslmode:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/app/DB_SSLMODE"
+      Type: String
+      Value: require
+      Description: TLS is required to the database.
+
+  AppConfigMaxUploadMb:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/app/MAX_UPLOAD_MB"
+      Type: String
+      Value: !Ref MaxUploadMb
+      Description: Largest photo upload accepted, in MB.
+
+  AppConfigStudentName:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/app/STUDENT_NAME"
+      Type: String
+      Value: !Ref StudentFullName
+      Description: Shown on the About page.
+
+  AppConfigLabName:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/app/LAB_NAME"
+      Type: String
+      Value: !Ref LabName
+      Description: Shown on the About page.
+
+  AppConfigAppEnv:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/app/APP_ENV"
+      Type: String
+      Value: !Ref Environment
+      Description: Deployment environment shown by the app.
+
+  # ===========================================================================
+  # Task definition
+  # ===========================================================================
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${ProjectName}-${Environment}-delivery-photos"
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: app
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EcrRepositoryName}:${ImageTag}"
+          Essential: true
+          ReadonlyRootFilesystem: true
+          PortMappings:
+            - ContainerPort: 8000
+              Protocol: tcp
+          LinuxParameters:
+            InitProcessEnabled: true
+          Secrets:
+            # .env values from Parameter Store
+            - Name: AWS_REGION
+              ValueFrom: !Ref AppConfigAwsRegion
+            - Name: PHOTO_BUCKET
+              ValueFrom: !Ref AppConfigPhotoBucket
+            - Name: DB_HOST
+              ValueFrom: !Ref AppConfigDbHost
+            - Name: DB_PORT
+              ValueFrom: !Ref AppConfigDbPort
+            - Name: DB_NAME
+              ValueFrom: !Ref AppConfigDbName
+            - Name: DB_SSLMODE
+              ValueFrom: !Ref AppConfigDbSslmode
+            - Name: MAX_UPLOAD_MB
+              ValueFrom: !Ref AppConfigMaxUploadMb
+            - Name: STUDENT_NAME
+              ValueFrom: !Ref AppConfigStudentName
+            - Name: LAB_NAME
+              ValueFrom: !Ref AppConfigLabName
+            - Name: APP_ENV
+              ValueFrom: !Ref AppConfigAppEnv
+            # Database credentials from the RDS-managed secret (Secrets Manager)
+            - Name: DB_USERNAME
+              ValueFrom: !Sub "${DatabaseSecretArn}:username::"
+            - Name: DB_PASSWORD
+              ValueFrom: !Sub "${DatabaseSecretArn}:password::"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref AppLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: app
+
+  # ===========================================================================
+  # ECS service and auto scaling (2 AZs, CPU target tracking)
+  # ===========================================================================
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub "${ProjectName}-${Environment}-delivery-photos"
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      DesiredCount: !Ref DesiredCount
+      DeploymentController:
+        Type: CODE_DEPLOY        # releases are blue/green, run by CodeDeploy
+      HealthCheckGracePeriodSeconds: 60
+      EnableExecuteCommand: false
+      EnableECSManagedTags: true
+      PropagateTags: SERVICE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Ref AppSubnetIds
+          SecurityGroups:
+            - !Ref AppSecurityGroupId
+      LoadBalancers:
+        - ContainerName: app
+          ContainerPort: 8000
+          TargetGroupArn: !Ref BlueTargetGroupArn
+
+  ServiceScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      ServiceNamespace: ecs
+      ScalableDimension: ecs:service:DesiredCount
+      ResourceId: !Sub "service/${Cluster}/${Service.Name}"
+      MinCapacity: !Ref MinTasks
+      MaxCapacity: !Ref MaxTasks
+
+  ServiceCpuScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub "${ProjectName}-${Environment}-cpu-target-60"
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ServiceScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 60
+        ScaleInCooldown: 120
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+
+  # ===========================================================================
+  # Release-safety alarms: CodeDeploy watches these and rolls back if any fires
+  # ===========================================================================
+  Target5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-target-5xx"
+      AlarmDescription: The application is returning server errors.
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_Target_5XX_Count
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref LoadBalancerFullName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  BlueUnhealthyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-tg-blue-unhealthy"
+      AlarmDescription: Unhealthy tasks behind the blue target group.
+      Namespace: AWS/ApplicationELB
+      MetricName: UnHealthyHostCount
+      Dimensions:
+        - Name: TargetGroup
+          Value: !Ref BlueTargetGroupFullName
+        - Name: LoadBalancer
+          Value: !Ref LoadBalancerFullName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  GreenUnhealthyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-tg-green-unhealthy"
+      AlarmDescription: Unhealthy tasks behind the green target group.
+      Namespace: AWS/ApplicationELB
+      MetricName: UnHealthyHostCount
+      Dimensions:
+        - Name: TargetGroup
+          Value: !Ref GreenTargetGroupFullName
+        - Name: LoadBalancer
+          Value: !Ref LoadBalancerFullName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+# -----------------------------------------------------------------------------
+# Outputs: the pipeline stack imports the exports named <project>-<env>-<Name>.
+# -----------------------------------------------------------------------------
+Outputs:
+  AppLogGroupName:
+    Value: !Ref AppLogGroup
+  AppConfigPath:
+    Description: Parameter Store path that holds the app's .env values.
+    Value: !Sub "/${ProjectName}/${Environment}/app/"
+  TaskFamily:
+    Description: Each release registers a new revision of this family through CodeDeploy.
+    Value: !Sub "${ProjectName}-${Environment}-delivery-photos"
+  ClusterName:
+    Value: !Ref Cluster
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-ClusterName"
+  ServiceName:
+    Value: !GetAtt Service.Name
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-ServiceName"
+  TaskExecutionRoleArn:
+    Value: !GetAtt TaskExecutionRole.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-TaskExecutionRoleArn"
+  TaskRoleArn:
+    Value: !GetAtt TaskRole.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-TaskRoleArn"
+  Target5xxAlarmName:
+    Value: !Ref Target5xxAlarm
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-Target5xxAlarmName"
+  BlueUnhealthyAlarmName:
+    Value: !Ref BlueUnhealthyAlarm
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-BlueUnhealthyAlarmName"
+  GreenUnhealthyAlarmName:
+    Value: !Ref GreenUnhealthyAlarm
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-GreenUnhealthyAlarmName"
