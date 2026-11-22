@@ -1,0 +1,205 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 940" width="1400" height="940" font-family="Arial, Helvetica, sans-serif">
+  <defs>
+    <marker id="up" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#d9480f"/></marker>
+    <marker id="view" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1971c2"/></marker>
+    <marker id="rep" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2b8a3e"/></marker>
+    <marker id="gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#495057"/></marker>
+    <style>
+      .t  { font-size: 13px; fill: #1b1f24; }
+      .ts { font-size: 11px; fill: #495057; }
+      .tb { font-size: 13px; font-weight: 700; fill: #1b1f24; }
+      .th { font-size: 15px; font-weight: 700; fill: #1b1f24; }
+      .num { font-size: 11px; font-weight: 700; fill: #fff; }
+      .lbl { font-size: 11px; font-weight: 700; }
+    </style>
+  </defs>
+
+  <rect width="1400" height="940" fill="#ffffff"/>
+  <text x="20" y="34" font-size="22" font-weight="700" fill="#13233f">Onward Logistics — delivery photos architecture</text>
+  <text x="20" y="56" class="ts">All resources defined in CloudFormation and deployed by Git sync. Public resources in green; everything else is private.</text>
+
+  <!-- ===================== Users ===================== -->
+  <rect x="20" y="380" width="160" height="96" rx="8" fill="#f8f9fa" stroke="#495057"/>
+  <text x="100" y="408" text-anchor="middle" class="tb">Users</text>
+  <text x="100" y="428" text-anchor="middle" class="ts">Riders upload</text>
+  <text x="100" y="444" text-anchor="middle" class="ts">Customers and</text>
+  <text x="100" y="460" text-anchor="middle" class="ts">merchants view</text>
+
+  <!-- ===================== CloudFront ===================== -->
+  <rect x="210" y="330" width="160" height="196" rx="8" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.5"/>
+  <text x="290" y="356" text-anchor="middle" class="tb">Amazon CloudFront</text>
+  <text x="290" y="374" text-anchor="middle" class="ts">Global edge · PUBLIC</text>
+  <text x="222" y="400" class="ts">• Default → ALB (no cache)</text>
+  <text x="222" y="417" class="ts">• /media/* → S3 via OAC</text>
+  <text x="222" y="434" class="ts">   (CachingOptimized)</text>
+  <text x="222" y="451" class="ts">• /static/* → ALB (cached)</text>
+  <text x="222" y="468" class="ts">• HTTPS only, HTTP/3</text>
+  <text x="222" y="485" class="ts">• CORP same-origin,</text>
+  <text x="222" y="502" class="ts">   noindex, HSTS</text>
+
+  <!-- ===================== Primary Region ===================== -->
+  <rect x="392" y="70" width="670" height="850" rx="10" fill="none" stroke="#232f3e" stroke-width="2" stroke-dasharray="8 5"/>
+  <text x="408" y="94" class="th">AWS Region eu-west-1 (primary)</text>
+
+  <!-- VPC -->
+  <rect x="410" y="108" width="425" height="610" rx="8" fill="#fbfcfd" stroke="#7d8a99" stroke-width="1.5"/>
+  <text x="424" y="128" class="tb">VPC 10.20.0.0/16</text>
+
+  <!-- AZ columns -->
+  <rect x="420" y="138" width="200" height="572" rx="6" fill="none" stroke="#adb5bd" stroke-dasharray="4 4"/>
+  <text x="430" y="155" class="ts">Availability Zone a</text>
+  <rect x="625" y="138" width="200" height="572" rx="6" fill="none" stroke="#adb5bd" stroke-dasharray="4 4"/>
+  <text x="635" y="155" class="ts">Availability Zone b</text>
+
+  <!-- Public subnets -->
+  <rect x="428" y="165" width="184" height="95" rx="5" fill="#e8f5e9" stroke="#2e7d32"/>
+  <text x="436" y="181" class="ts">Public 10.20.0.0/24</text>
+  <rect x="633" y="165" width="184" height="95" rx="5" fill="#e8f5e9" stroke="#2e7d32"/>
+  <text x="641" y="181" class="ts">Public 10.20.1.0/24</text>
+  <rect x="470" y="196" width="305" height="50" rx="6" fill="#ffffff" stroke="#2e7d32" stroke-width="1.5"/>
+  <text x="622" y="217" text-anchor="middle" class="tb">Application Load Balancer</text>
+  <text x="622" y="235" text-anchor="middle" class="ts">internet-facing · SG: CloudFront prefix list only</text>
+
+  <!-- Private app subnets -->
+  <rect x="428" y="285" width="184" height="190" rx="5" fill="#e3f2fd" stroke="#1565c0"/>
+  <text x="436" y="301" class="ts">Private app 10.20.10.0/24</text>
+  <rect x="633" y="285" width="184" height="190" rx="5" fill="#e3f2fd" stroke="#1565c0"/>
+  <text x="811" y="301" text-anchor="end" class="ts">Private app 10.20.11.0/24</text>
+  <rect x="448" y="330" width="145" height="78" rx="6" fill="#ffffff" stroke="#1565c0" stroke-width="1.5"/>
+  <text x="520" y="354" text-anchor="middle" class="tb">ECS Fargate task</text>
+  <text x="520" y="372" text-anchor="middle" class="ts">Django app :8000</text>
+  <text x="520" y="388" text-anchor="middle" class="ts">read-only, non-root</text>
+  <rect x="653" y="330" width="145" height="78" rx="6" fill="#ffffff" stroke="#1565c0" stroke-width="1.5"/>
+  <text x="725" y="354" text-anchor="middle" class="tb">ECS Fargate task</text>
+  <text x="725" y="372" text-anchor="middle" class="ts">Django app :8000</text>
+  <text x="725" y="388" text-anchor="middle" class="ts">auto scaling 2–6</text>
+
+  <!-- Isolated data subnets -->
+  <rect x="428" y="500" width="184" height="112" rx="5" fill="#f3e5f5" stroke="#6a1b9a"/>
+  <text x="436" y="516" class="ts">Isolated 10.20.20.0/24</text>
+  <rect x="633" y="500" width="184" height="112" rx="5" fill="#f3e5f5" stroke="#6a1b9a"/>
+  <text x="811" y="516" text-anchor="end" class="ts">Isolated 10.20.21.0/24</text>
+  <rect x="448" y="530" width="145" height="66" rx="6" fill="#ffffff" stroke="#6a1b9a" stroke-width="1.5"/>
+  <text x="520" y="554" text-anchor="middle" class="tb">RDS PostgreSQL</text>
+  <text x="520" y="572" text-anchor="middle" class="ts">primary · encrypted</text>
+  <text x="520" y="587" text-anchor="middle" class="ts">not publicly accessible</text>
+  <rect x="653" y="530" width="145" height="66" rx="6" fill="#ffffff" stroke="#6a1b9a" stroke-width="1.5" stroke-dasharray="5 3"/>
+  <text x="725" y="554" text-anchor="middle" class="tb">RDS standby</text>
+  <text x="725" y="572" text-anchor="middle" class="ts">Multi-AZ, synchronous</text>
+  <text x="725" y="587" text-anchor="middle" class="ts">automatic failover</text>
+  <line x1="593" y1="563" x2="651" y2="563" stroke="#6a1b9a" stroke-width="1.5" stroke-dasharray="4 3"/>
+
+  <!-- Endpoints -->
+  <rect x="428" y="628" width="389" height="78" rx="5" fill="#e3f2fd" stroke="#1565c0"/>
+  <text x="622" y="648" text-anchor="middle" class="tb">VPC endpoints: no NAT, no internet route</text>
+  <text x="622" y="667" text-anchor="middle" class="ts">Interface (both AZs): ECR API, ECR Docker, Logs, Secrets Manager</text>
+  <text x="622" y="685" text-anchor="middle" class="ts">Gateway: S3, policy limited to the photo bucket and ECR layers</text>
+
+  <!-- Regional services -->
+  <rect x="855" y="108" width="192" height="168" rx="8" fill="#ffffff" stroke="#3f8624" stroke-width="2"/>
+  <text x="951" y="130" text-anchor="middle" class="tb">S3 photo bucket</text>
+  <text x="867" y="150" class="ts">• Block Public Access (all 4)</text>
+  <text x="867" y="166" class="ts">• Versioning, SSE-S3</text>
+  <text x="867" y="182" class="ts">• Intelligent-Tiering</text>
+  <text x="867" y="198" class="ts">• Read: CloudFront OAC only</text>
+  <text x="867" y="214" class="ts">• Deny DeleteObjectVersion</text>
+  <text x="867" y="230" class="ts">• media/originals, thumbnails</text>
+  <text x="867" y="246" class="ts">• meta/*.json sidecars</text>
+  <text x="867" y="264" class="ts">Direct URL → 403</text>
+
+  <rect x="855" y="296" width="192" height="52" rx="6" fill="#ffffff" stroke="#7d8a99"/>
+  <text x="951" y="317" text-anchor="middle" class="tb">Secrets Manager</text>
+  <text x="951" y="335" text-anchor="middle" class="ts">DB password · origin token</text>
+  <rect x="855" y="360" width="192" height="52" rx="6" fill="#ffffff" stroke="#7d8a99"/>
+  <text x="951" y="381" text-anchor="middle" class="tb">Amazon ECR</text>
+  <text x="951" y="399" text-anchor="middle" class="ts">git-SHA tags, scan on push</text>
+  <rect x="855" y="424" width="192" height="52" rx="6" fill="#ffffff" stroke="#7d8a99"/>
+  <text x="951" y="445" text-anchor="middle" class="tb">CloudWatch Logs</text>
+  <text x="951" y="463" text-anchor="middle" class="ts">JSON app logs, 30 days</text>
+  <rect x="855" y="488" width="192" height="52" rx="6" fill="#ffffff" stroke="#7d8a99"/>
+  <text x="951" y="509" text-anchor="middle" class="tb">RDS automated backups</text>
+  <text x="951" y="527" text-anchor="middle" class="ts">7-day point-in-time recovery</text>
+
+  <!-- ===================== Arrows ===================== -->
+  <!-- 1 users to CloudFront -->
+  <line x1="180" y1="428" x2="207" y2="428" stroke="#1971c2" stroke-width="2.5" marker-end="url(#view)"/>
+  <!-- 2 CloudFront to ALB -->
+  <polyline points="370,372 448,372 448,221 467,221" fill="none" stroke="#d9480f" stroke-width="2.5" marker-end="url(#up)"/>
+  <text x="376" y="364" class="lbl" fill="#d9480f">+ X-Origin-Verify</text>
+  <!-- 3 ALB to tasks -->
+  <line x1="585" y1="246" x2="585" y2="327" stroke="#d9480f" stroke-width="2" marker-end="url(#up)"/>
+  <line x1="662" y1="246" x2="662" y2="327" stroke="#d9480f" stroke-width="2" marker-end="url(#up)"/>
+  <!-- 4 tasks to S3 via gateway endpoint -->
+  <polyline points="798,350 840,350 840,190 852,190" fill="none" stroke="#d9480f" stroke-width="2.5" marker-end="url(#up)"/>
+  <!-- 5 tasks to RDS -->
+  <line x1="565" y1="408" x2="565" y2="527" stroke="#d9480f" stroke-width="2" marker-end="url(#up)"/>
+  <polyline points="700,408 700,488 588,488 588,527" fill="none" stroke="#d9480f" stroke-width="2" marker-end="url(#up)"/>
+  <!-- 7 CloudFront to S3 via OAC -->
+  <polyline points="290,330 290,64 951,64 951,105" fill="none" stroke="#1971c2" stroke-width="2.5" marker-end="url(#view)"/>
+  <text x="940" y="98" text-anchor="end" class="lbl" fill="#1971c2">GET /media/* via OAC (cache miss)</text>
+  <!-- 6 replication -->
+  <line x1="1047" y1="190" x2="1102" y2="190" stroke="#2b8a3e" stroke-width="2.5" marker-end="url(#rep)"/>
+
+  <!-- Number badges -->
+  <g>
+    <circle cx="194" cy="414" r="10" fill="#1971c2"/><text x="194" y="418" text-anchor="middle" class="num">1</text>
+    <circle cx="448" cy="272" r="10" fill="#d9480f"/><text x="448" y="276" text-anchor="middle" class="num">2</text>
+    <circle cx="840" cy="270" r="10" fill="#d9480f"/><text x="840" y="274" text-anchor="middle" class="num">3</text>
+    <circle cx="700" cy="450" r="10" fill="#d9480f"/><text x="700" y="454" text-anchor="middle" class="num">4</text>
+    <circle cx="1074" cy="176" r="10" fill="#2b8a3e"/><text x="1074" y="180" text-anchor="middle" class="num">5</text>
+    <circle cx="290" cy="200" r="10" fill="#1971c2"/><text x="290" y="204" text-anchor="middle" class="num">6</text>
+  </g>
+
+  <!-- Flow explanation inside primary Region -->
+  <rect x="410" y="735" width="637" height="172" rx="8" fill="#f8f9fa" stroke="#dee2e6"/>
+  <text x="424" y="757" class="tb">How a photo flows</text>
+  <text x="424" y="779" class="t"><tspan font-weight="700" fill="#1971c2">1</tspan>  Every request enters through CloudFront over HTTPS; the ALB is never addressed directly.</text>
+  <text x="424" y="800" class="t"><tspan font-weight="700" fill="#d9480f">2</tspan>  Upload: CloudFront adds a secret header; the ALB forwards only those requests to a task.</text>
+  <text x="424" y="821" class="t"><tspan font-weight="700" fill="#d9480f">3</tspan>  The task stores the original, a WebP thumbnail and a JSON sidecar in S3 (gateway endpoint).</text>
+  <text x="424" y="842" class="t"><tspan font-weight="700" fill="#d9480f">4</tspan>  It saves the details row (title, reference, S3 key, version, SHA-256) in RDS. No image bytes.</text>
+  <text x="424" y="863" class="t"><tspan font-weight="700" fill="#2b8a3e">5</tspan>  S3 replicates every object to eu-central-1; deletes are not replicated.</text>
+  <text x="424" y="884" class="t"><tspan font-weight="700" fill="#1971c2">6</tspan>  Viewing: pages come from the app; photos come from the edge cache, or S3 via OAC on a miss.</text>
+
+  <!-- ===================== DR Region ===================== -->
+  <rect x="1090" y="70" width="290" height="250" rx="10" fill="none" stroke="#232f3e" stroke-width="2" stroke-dasharray="8 5"/>
+  <text x="1106" y="94" class="th">AWS Region eu-central-1 (DR)</text>
+  <rect x="1106" y="108" width="258" height="196" rx="8" fill="#ffffff" stroke="#2b8a3e" stroke-width="2"/>
+  <text x="1235" y="132" text-anchor="middle" class="tb">S3 replica bucket</text>
+  <text x="1120" y="154" class="ts">• Glacier Instant Retrieval (ms access)</text>
+  <text x="1120" y="172" class="ts">• Versioning, Block Public Access</text>
+  <text x="1120" y="190" class="ts">• Delete markers not replicated</text>
+  <text x="1120" y="208" class="ts">• Deny DeleteObjectVersion / DeleteBucket</text>
+  <text x="1120" y="226" class="ts">• Separate stack, DeletionPolicy Retain</text>
+  <text x="1120" y="250" class="ts">Holds photos, thumbnails and sidecars,</text>
+  <text x="1120" y="266" class="ts">so the catalogue can be rebuilt with</text>
+  <text x="1120" y="282" class="ts">manage.py rebuild_catalogue</text>
+
+  <!-- Legend -->
+  <rect x="1090" y="340" width="290" height="232" rx="8" fill="#f8f9fa" stroke="#dee2e6"/>
+  <text x="1106" y="362" class="tb">Legend</text>
+  <rect x="1106" y="374" width="22" height="14" fill="#e8f5e9" stroke="#2e7d32"/><text x="1138" y="386" class="t">Public (internet-reachable)</text>
+  <rect x="1106" y="398" width="22" height="14" fill="#e3f2fd" stroke="#1565c0"/><text x="1138" y="410" class="t">Private app tier</text>
+  <rect x="1106" y="422" width="22" height="14" fill="#f3e5f5" stroke="#6a1b9a"/><text x="1138" y="434" class="t">Isolated data tier (no routes out)</text>
+  <line x1="1106" y1="459" x2="1128" y2="459" stroke="#d9480f" stroke-width="2.5" marker-end="url(#up)"/><text x="1138" y="463" class="t">Upload path</text>
+  <line x1="1106" y1="483" x2="1128" y2="483" stroke="#1971c2" stroke-width="2.5" marker-end="url(#view)"/><text x="1138" y="487" class="t">Viewing path</text>
+  <line x1="1106" y1="507" x2="1128" y2="507" stroke="#2b8a3e" stroke-width="2.5" marker-end="url(#rep)"/><text x="1138" y="511" class="t">Cross-Region Replication</text>
+  <line x1="1106" y1="531" x2="1128" y2="531" stroke="#6a1b9a" stroke-width="1.5" stroke-dasharray="4 3"/><text x="1138" y="535" class="t">Synchronous DB replication</text>
+  <text x="1106" y="558" class="ts">Dashed outline = AWS Region boundary</text>
+
+  <!-- Delivery pipeline -->
+  <rect x="1090" y="592" width="290" height="315" rx="8" fill="#ffffff" stroke="#7d8a99"/>
+  <text x="1106" y="614" class="tb">How it is deployed</text>
+  <rect x="1106" y="628" width="258" height="56" rx="6" fill="#f8f9fa" stroke="#adb5bd"/>
+  <text x="1235" y="650" text-anchor="middle" class="tb">GitHub: infra repository</text>
+  <text x="1235" y="668" text-anchor="middle" class="ts">templates + deployment files</text>
+  <line x1="1235" y1="684" x2="1235" y2="708" stroke="#495057" stroke-width="1.5" marker-end="url(#gray)"/>
+  <rect x="1106" y="710" width="258" height="44" rx="6" fill="#f8f9fa" stroke="#adb5bd"/>
+  <text x="1235" y="728" text-anchor="middle" class="tb">CloudFormation Git sync</text>
+  <text x="1235" y="745" text-anchor="middle" class="ts">platform stack + DR stack</text>
+  <rect x="1106" y="772" width="258" height="56" rx="6" fill="#f8f9fa" stroke="#adb5bd"/>
+  <text x="1235" y="794" text-anchor="middle" class="tb">GitHub: app repository</text>
+  <text x="1235" y="812" text-anchor="middle" class="ts">tests · gitleaks · Trivy</text>
+  <line x1="1235" y1="828" x2="1235" y2="852" stroke="#495057" stroke-width="1.5" marker-end="url(#gray)"/>
+  <rect x="1106" y="854" width="258" height="40" rx="6" fill="#f8f9fa" stroke="#adb5bd"/>
+  <text x="1235" y="879" text-anchor="middle" class="t">OIDC role → push image to ECR</text>
+</svg>
