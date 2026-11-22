@@ -142,8 +142,9 @@ Resources:
     Type: AWS::IAM::ManagedPolicy
     Properties:
       Description: >-
-        Write photos and metadata sidecars, read photos. No delete permission:
-        the application can never destroy evidence.
+        Write, read and delete photos and metadata sidecars. A delete only removes the current
+        version: the bucket policy denies s3:DeleteObjectVersion, so evidence can't be erased
+        before the lifecycle rule expires it, and the recovery Region's replica is untouched.
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -158,6 +159,13 @@ Resources:
             Effect: Allow
             Action:
               - s3:GetObject
+            Resource:
+              - !Sub "${PhotoBucketArn}/media/*"
+              - !Sub "${PhotoBucketArn}/meta/*"
+          - Sid: DeletePhotosAndSidecarsOfPermanentlyDeletedRows
+            Effect: Allow
+            Action:
+              - s3:DeleteObject
             Resource:
               - !Sub "${PhotoBucketArn}/media/*"
               - !Sub "${PhotoBucketArn}/meta/*"
