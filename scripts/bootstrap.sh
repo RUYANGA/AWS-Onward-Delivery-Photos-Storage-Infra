@@ -53,7 +53,7 @@ if [[ $phase == connection ]]; then
     echo "1. Authorise both connections: Console > Developer Tools > Settings > Connections > $PROJECT-$ENVIRONMENT-github > Update pending connection (in $DR_REGION and $PRIMARY_REGION)."
   echo "2. In GitHub, give the AWS Connector app access to $REPO_NAME."
   echo "3. In $REPO_NAME, set the Actions variable AWS_ROLE_ARN=$(out "$PRIMARY_REGION" "$BOOTSTRAP_STACK" InfraCiRoleArn), then push to main."
-  echo "4. In onward-delivery-photos-app, set the Actions variables AWS_REGION=$PRIMARY_REGION,"
+  echo "4. In $APP_REPO_NAME, set the Actions variables AWS_REGION=$PRIMARY_REGION,"
   echo "   ECR_REPOSITORY=$ECR_REPOSITORY and AWS_ROLE_ARN=$(out "$PRIMARY_REGION" "$BOOTSTRAP_STACK" AppCiRoleArn), then push to main."
   echo "Then run: ./scripts/bootstrap.sh sync"
   exit 0
@@ -77,7 +77,7 @@ aws s3api head-object --region "$PRIMARY_REGION" --bucket "$bucket" --key "platf
 # The pipeline releases the image the app's GitHub Actions pushed as :latest.
 aws ecr describe-images --region "$PRIMARY_REGION" --repository-name "$ECR_REPOSITORY" \
     --image-ids imageTag=latest >/dev/null 2>&1 || {
-  echo "No $ECR_REPOSITORY:latest image yet. Push onward-delivery-photos-app to main so its CI pushes one, then re-run."
+  echo "No $ECR_REPOSITORY:latest image yet. Push $APP_REPO_NAME to main so its CI pushes one, then re-run."
   exit 1
 }
 

@@ -2,7 +2,7 @@
 
 The AWS infrastructure for Onward Logistics' proof-of-delivery photos, deployed from this
 repository by **CloudFormation Git sync**. The application lives in its own repository,
-[onward-delivery-photos-app](https://github.com/RUYANGA/onward-delivery-photos-app). Its GitHub Actions
+[AWS-Onward-Delivery-Photos-Storage-App](https://github.com/RUYANGA/AWS-Onward-Delivery-Photos-Storage-App). Its GitHub Actions
 push each image to ECR, and **AWS CodePipeline** releases it to ECS with a **CodeDeploy blue/green** deployment.
 
 ![Architecture](docs/architecture.svg)
@@ -68,7 +68,7 @@ If the 5xx alarm or either target group's unhealthy-host alarm fires, it rolls b
 
 | You change | Released by | Trigger |
 | --- | --- | --- |
-| Code in onward-delivery-photos-app | **CodePipeline + CodeDeploy** `onward-dev-photos-release` | the app's CI pushes `:latest` to ECR (every merge to `main`) |
+| Code in AWS-Onward-Delivery-Photos-Storage-App | **CodePipeline + CodeDeploy** `onward-dev-photos-release` | the app's CI pushes `:latest` to ECR (every merge to `main`) |
 | Templates or deployment files in this repository | **CloudFormation Git sync** | merge to `main` in this repository |
 
 - **To release:** merge to `main` in the app repository. Watch it at the `PipelineConsoleUrl` output of `onward-dev-pipeline`.
