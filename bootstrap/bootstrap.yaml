@@ -1,0 +1,657 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Onward Logistics, one-time bootstrap that turns on CloudFormation Git sync for the
+  delivery photos stacks. Deployed once per Region by scripts/bootstrap.sh; Git sync cannot
+  create the thing that enables Git sync, so only this stack is deployed with the CLI.
+  Recovery Region (StackRole=dr): GitHub connection, Git sync role, sync for onward-<env>-photos-dr.
+  Primary Region (StackRole=primary): the same, plus syncs for onward-<env>-platform and
+  onward-<env>-pipeline, the ECR repository, the deploy-bundle bucket, the nested-template bucket, and the GitHub Actions
+  roles of both repositories (app: push images; infra: publish nested templates).
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: onward
+    AllowedPattern: "^[a-z][a-z0-9-]{1,15}$"
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+  StackRole:
+    Type: String
+    AllowedValues:
+      - primary
+      - dr
+    Description: primary = Region that runs the app; dr = Region that holds the photo replica.
+  GitHubOwner:
+    Type: String
+    Description: GitHub user or organisation (lowercase) that owns both repositories.
+  RepoName:
+    Type: String
+    Default: AWS-Onward-Delivery-Photos-Storage-Infra
+  AppRepoName:
+    Type: String
+    Default: onward-delivery-photos-app
+    Description: Its GitHub Actions push images to ECR (main branch only).
+  Branch:
+    Type: String
+    Default: main
+  ConnectionReady:
+    Type: String
+    AllowedValues:
+      - "true"
+      - "false"
+    Default: "false"
+    Description: Set to true after authorising the GitHub connection in the console.
+  ExistingConnectionArn:
+    Type: String
+    Default: ""
+    Description: >-
+      ARN of an AVAILABLE GitHub connection in this Region to reuse (one connection can link many
+      repositories). Leave empty to create onward-<env>-github, which must be authorised once.
+    AllowedPattern: ^$|^arn:aws[a-z-]*:(codeconnections|codestar-connections):[a-z0-9-]+:[0-9]{12}:connection/[0-9a-f-]+$
+  PipelineReady:
+    Type: String
+    AllowedValues:
+      - "true"
+      - "false"
+    Default: "true"
+    Description: >-
+      false until the platform stack exists; scripts/bootstrap.sh sets it. The pipeline imports
+      the platform's exports (cluster, service, listeners, target groups, alarms).
+  CreateGitHubOidcProvider:
+    Type: String
+    AllowedValues:
+      - "true"
+      - "false"
+    Default: "true"
+    Description: false if the account already has token.actions.githubusercontent.com (scripts/bootstrap.sh checks).
+  ExistingGitHubOidcProviderArn:
+    Type: String
+    Default: ""
+
+Conditions:
+  IsPrimary: !Equals
+    - !Ref StackRole
+    - primary
+  IsDr: !Equals
+    - !Ref StackRole
+    - dr
+  IsConnectionReady: !Equals
+    - !Ref ConnectionReady
+    - "true"
+  CreateConnection: !Equals
+    - !Ref ExistingConnectionArn
+    - ""
+  SyncDr: !And
+    - !Condition IsDr
+    - !Condition IsConnectionReady
+  SyncPlatform: !And
+    - !Condition IsPrimary
+    - !Condition IsConnectionReady
+  SyncPipeline: !And
+    - !Condition SyncPlatform
+    - !Equals
+      - !Ref PipelineReady
+      - "true"
+  CreateOidc: !And
+    - !Condition IsPrimary
+    - !Equals
+      - !Ref CreateGitHubOidcProvider
+      - "true"
+
+Resources:
+  # ===========================================================================
+  # GitHub connection and repository link
+  # ===========================================================================
+  GitHubConnection:
+    Type: AWS::CodeStarConnections::Connection
+    Condition: CreateConnection
+    Properties:
+      ConnectionName: !Sub "${ProjectName}-${Environment}-github"
+      ProviderType: GitHub
+
+  RepositoryLink:
+    Type: AWS::CodeStarConnections::RepositoryLink
+    Condition: IsConnectionReady
+    Properties:
+      ConnectionArn: !If
+        - CreateConnection
+        - !Ref GitHubConnection
+        - !Ref ExistingConnectionArn
+      OwnerId: !Ref GitHubOwner
+      RepositoryName: !Ref RepoName
+
+  # ===========================================================================
+  # Git sync role (IAM is global, so names carry the Region)
+  # ===========================================================================
+  GitSyncPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${ProjectName}-${Environment}-gitsync-${AWS::Region}"
+      Description: Lets CloudFormation Git sync create and run change sets, including nested stacks.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SyncToCloudFormation
+            Effect: Allow
+            Action:
+              - cloudformation:CreateChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:DescribeChangeSet
+              - cloudformation:DescribeStackEvents
+              - cloudformation:DescribeStacks
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:GetTemplate
+              - cloudformation:GetTemplateSummary
+              - cloudformation:ListChangeSets
+              - cloudformation:ListExports
+              - cloudformation:ListStacks
+              - cloudformation:ValidateTemplate
+            Resource: "*"
+          - Sid: NestedStacksOfOnwardStacks
+            Effect: Allow
+            Action:
+              - cloudformation:CreateStack
+              - cloudformation:UpdateStack
+              - cloudformation:DeleteStack
+              - cloudformation:DescribeStackResource
+              - cloudformation:DescribeStackResources
+              - cloudformation:TagResource
+              - cloudformation:UntagResource
+            Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-${Environment}-*"
+          - Sid: PolicyForManagedRules
+            Effect: Allow
+            Action:
+              - events:PutRule
+              - events:PutTargets
+            Resource: "*"
+            Condition:
+              StringEquals:
+                "events:ManagedBy":
+                  - cloudformation.sync.codeconnections.amazonaws.com
+          - Sid: PolicyForDescribingRule
+            Effect: Allow
+            Action:
+              - events:DescribeRule
+            Resource: "*"
+          - Sid: UseConnection
+            Effect: Allow
+            Action:
+              - codeconnections:UseConnection
+              - codestar-connections:UseConnection
+            Resource: !If
+              - CreateConnection
+              - !Ref GitHubConnection
+              - !Ref ExistingConnectionArn
+
+  StackResourcesPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${ProjectName}-${Environment}-photos-stack-resources-${AWS::Region}"
+      Description: >-
+        Permissions to build the delivery photos stacks. Cannot create inline policies,
+        IAM users or access keys.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ServicesUsedByTheStacks
+            Effect: Allow
+            Action:
+              - ec2:*
+              - ecs:*
+              - elasticloadbalancing:*
+              - application-autoscaling:*
+              - rds:*
+              - s3:*
+              - cloudfront:*
+              - secretsmanager:*
+              - logs:*
+              - cloudwatch:*
+              - codepipeline:*
+              - codedeploy:*
+              - wafv2:*
+              - ecr:DescribeRepositories
+              - kms:DescribeKey
+              - kms:CreateGrant
+              - kms:ListAliases
+            Resource: "*"
+          - Sid: ReleaseTriggerRule
+            Effect: Allow
+            Action:
+              - events:PutRule
+              - events:DeleteRule
+              - events:DescribeRule
+              - events:PutTargets
+              - events:RemoveTargets
+              - events:ListTargetsByRule
+              - events:TagResource
+              - events:UntagResource
+            Resource: !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${ProjectName}-*"
+          - Sid: AppConfigurationParameters
+            Effect: Allow
+            Action:
+              - ssm:PutParameter
+              - ssm:DeleteParameter
+              - ssm:GetParameter
+              - ssm:GetParameters
+              - ssm:AddTagsToResource
+              - ssm:RemoveTagsFromResource
+              - ssm:ListTagsForResource
+            Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/*"
+          - Sid: DescribeParameters
+            Effect: Allow
+            Action:
+              - ssm:DescribeParameters
+            Resource: "*"
+          - Sid: OnwardRolesOnly
+            Effect: Allow
+            Action:
+              - iam:CreateRole
+              - iam:DeleteRole
+              - iam:GetRole
+              - iam:UpdateRole
+              - iam:UpdateRoleDescription
+              - iam:UpdateAssumeRolePolicy
+              - iam:TagRole
+              - iam:UntagRole
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+              - iam:ListAttachedRolePolicies
+              - iam:ListRolePolicies
+              - iam:ListRoleTags
+              - iam:PassRole
+            Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}-*"
+          - Sid: OnwardManagedPoliciesOnly
+            Effect: Allow
+            Action:
+              - iam:CreatePolicy
+              - iam:DeletePolicy
+              - iam:CreatePolicyVersion
+              - iam:DeletePolicyVersion
+              - iam:GetPolicy
+              - iam:GetPolicyVersion
+              - iam:ListPolicyVersions
+              - iam:TagPolicy
+              - iam:UntagPolicy
+            Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${ProjectName}-*"
+          - Sid: ReadAwsManagedPolicies
+            Effect: Allow
+            Action:
+              - iam:GetPolicy
+              - iam:GetPolicyVersion
+            Resource: !Sub "arn:${AWS::Partition}:iam::aws:policy/*"
+          - Sid: ServiceLinkedRoles
+            Effect: Allow
+            Action:
+              - iam:CreateServiceLinkedRole
+            Resource: "*"
+            Condition:
+              StringEquals:
+                "iam:AWSServiceName":
+                  - ecs.amazonaws.com
+                  - ecs.application-autoscaling.amazonaws.com
+                  - elasticloadbalancing.amazonaws.com
+                  - rds.amazonaws.com
+          - Sid: EnforceCompanyAccessStandard
+            Effect: Deny
+            Action:
+              - iam:PutRolePolicy
+              - iam:PutUserPolicy
+              - iam:PutGroupPolicy
+              - iam:CreateUser
+              - iam:CreateAccessKey
+            Resource: "*"
+
+  GitSyncRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-gitsync-${AWS::Region}"
+      Description: Assumed by CloudFormation Git sync to deploy the delivery photos stacks from GitHub.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.sync.codeconnections.amazonaws.com
+            Action:
+              - sts:AssumeRole
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Ref GitSyncPolicy
+        - !Ref StackResourcesPolicy
+
+  # ===========================================================================
+  # Sync configurations: one stack per deployment file
+  # ===========================================================================
+  PhotosDrSync:
+    Type: AWS::CodeStarConnections::SyncConfiguration
+    Condition: SyncDr
+    Properties:
+      ResourceName: !Sub "${ProjectName}-${Environment}-photos-dr"
+      ConfigFile: !Sub "deployments/${Environment}/photos-dr.yaml"
+      Branch: !Ref Branch
+      RepositoryLinkId: !GetAtt RepositoryLink.RepositoryLinkId
+      RoleArn: !GetAtt GitSyncRole.Arn
+      SyncType: CFN_STACK_SYNC
+      PublishDeploymentStatus: ENABLED
+      TriggerResourceUpdateOn: FILE_CHANGE
+
+  PipelineSync:
+    Type: AWS::CodeStarConnections::SyncConfiguration
+    Condition: SyncPipeline
+    Properties:
+      ResourceName: !Sub "${ProjectName}-${Environment}-pipeline"
+      ConfigFile: !Sub "deployments/${Environment}/pipeline.yaml"
+      Branch: !Ref Branch
+      RepositoryLinkId: !GetAtt RepositoryLink.RepositoryLinkId
+      RoleArn: !GetAtt GitSyncRole.Arn
+      SyncType: CFN_STACK_SYNC
+      PublishDeploymentStatus: ENABLED
+      TriggerResourceUpdateOn: FILE_CHANGE
+
+  PlatformSync:
+    Type: AWS::CodeStarConnections::SyncConfiguration
+    Condition: SyncPlatform
+    Properties:
+      ResourceName: !Sub "${ProjectName}-${Environment}-platform"
+      ConfigFile: !Sub "deployments/${Environment}/platform.yaml"
+      Branch: !Ref Branch
+      RepositoryLinkId: !GetAtt RepositoryLink.RepositoryLinkId
+      RoleArn: !GetAtt GitSyncRole.Arn
+      SyncType: CFN_STACK_SYNC
+      PublishDeploymentStatus: ENABLED
+      TriggerResourceUpdateOn: FILE_CHANGE   # app releases go through CodePipeline, not this stack
+
+  # ===========================================================================
+  # Container registry (primary Region): images pushed by the app's GitHub Actions
+  # ===========================================================================
+  AppRepository:
+    Type: AWS::ECR::Repository
+    Condition: IsPrimary
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub "${ProjectName}-${Environment}/delivery-photos-app"
+      ImageTagMutability: MUTABLE   # "latest" is moved on each release; git-SHA tags are never reused
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep the 20 most recent images",
+                "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 20 },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+
+  # Deployment bundle (taskdef.json + appspec.yaml) uploaded by the app's GitHub Actions;
+  # the pipeline's S3 source reads it on every release.
+  DeployBundleBucket:
+    Type: AWS::S3::Bucket
+    Condition: IsPrimary
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-deploy-bundles-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration:
+        Status: Enabled          # required by the CodePipeline S3 source action
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-bundle-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+
+  # ===========================================================================
+  # Nested templates of the platform stack (primary Region)
+  # CloudFormation reads nested templates from S3. Infra CI uploads them under a
+  # content-hash prefix; objects are write-once, so a published version never changes.
+  # ===========================================================================
+  NestedTemplatesBucket:
+    Type: AWS::S3::Bucket
+    Condition: IsPrimary
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-cfn-templates-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  NestedTemplatesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: IsPrimary
+    Properties:
+      Bucket: !Ref NestedTemplatesBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - "s3:*"
+            Resource:
+              - !GetAtt NestedTemplatesBucket.Arn
+              - !Sub "${NestedTemplatesBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+          - Sid: WriteOnceObjects
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - s3:PutObject
+            Resource: !Sub "${NestedTemplatesBucket.Arn}/*"
+            Condition:
+              "Null":
+                s3:if-none-match: "true"
+
+  # ===========================================================================
+  # GitHub Actions (OIDC, no access keys)
+  #   app repo:   push images to ECR (a push of :latest starts the release pipeline)
+  #   infra repo: publish the nested templates
+  # ===========================================================================
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidc
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+
+  AppImagePushPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: IsPrimary
+    Properties:
+      ManagedPolicyName: !Sub "${ProjectName}-${Environment}-app-ci-push"
+      Description: Push images and deployment bundles for the delivery photos app. Nothing else.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: Login
+            Effect: Allow
+            Action:
+              - ecr:GetAuthorizationToken
+            Resource: "*"
+          - Sid: PushToAppRepository
+            Effect: Allow
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:PutImage
+              - ecr:BatchGetImage
+              - ecr:DescribeImages
+            Resource: !GetAtt AppRepository.Arn
+          - Sid: UploadDeploymentBundle
+            Effect: Allow
+            Action:
+              - s3:PutObject
+            Resource: !Sub "${DeployBundleBucket.Arn}/deploy/*"
+          - Sid: ReadCurrentTaskDefinition
+            Effect: Allow
+            Action:
+              - ecs:DescribeTaskDefinition
+            Resource: "*"   # this action does not support resource-level permissions
+
+  AppCiRole:
+    Type: AWS::IAM::Role
+    Condition: IsPrimary
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-app-ci"
+      Description: Assumed by the app repository's main branch to push images to ECR.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateOidc
+                - !Ref GitHubOidcProvider
+                - !Ref ExistingGitHubOidcProviderArn
+            Action:
+              - sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              # GitHubOwner is lowercase (the repository link requires it); the token keeps GitHub's case.
+              StringEqualsIgnoreCase:
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubOwner}/${AppRepoName}:ref:refs/heads/${Branch}"
+      ManagedPolicyArns:
+        - !Ref AppImagePushPolicy
+
+  NestedTemplatesPublishPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: IsPrimary
+    Properties:
+      ManagedPolicyName: !Sub "${ProjectName}-${Environment}-infra-ci-publish"
+      Description: Upload and read platform nested templates. No delete permission.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ListTemplates
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource: !GetAtt NestedTemplatesBucket.Arn
+          - Sid: PublishTemplates
+            Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+            Resource: !Sub "${NestedTemplatesBucket.Arn}/platform/*"
+
+  InfraCiRole:
+    Type: AWS::IAM::Role
+    Condition: IsPrimary
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-infra-ci"
+      Description: Assumed by the infra repository's GitHub Actions to publish nested templates.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateOidc
+                - !Ref GitHubOidcProvider
+                - !Ref ExistingGitHubOidcProviderArn
+            Action:
+              - sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringEqualsIgnoreCase:
+                token.actions.githubusercontent.com:sub:
+                  - !Sub "repo:${GitHubOwner}/${RepoName}:pull_request"
+                  - !Sub "repo:${GitHubOwner}/${RepoName}:ref:refs/heads/${Branch}"
+      ManagedPolicyArns:
+        - !Ref NestedTemplatesPublishPolicy
+
+Outputs:
+  ConnectionArn:
+    Description: The GitHub connection Git sync uses. A new one must be authorised once in the console.
+    Value: !If
+      - CreateConnection
+      - !Ref GitHubConnection
+      - !Ref ExistingConnectionArn
+  GitSyncRoleArn:
+    Value: !GetAtt GitSyncRole.Arn
+  AppRepositoryUri:
+    Condition: IsPrimary
+    Description: Images pushed by the app's GitHub Actions.
+    Value: !GetAtt AppRepository.RepositoryUri
+  # Exports imported by templates/pipeline.yaml
+  EcrRepositoryName:
+    Condition: IsPrimary
+    Value: !Ref AppRepository
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-EcrRepositoryName"
+  EcrRepositoryArn:
+    Condition: IsPrimary
+    Value: !GetAtt AppRepository.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-EcrRepositoryArn"
+  DeployBundleBucketName:
+    Condition: IsPrimary
+    Value: !Ref DeployBundleBucket
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-DeployBundleBucketName"
+  DeployBundleBucketArn:
+    Condition: IsPrimary
+    Value: !GetAtt DeployBundleBucket.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-DeployBundleBucketArn"
+  NestedTemplatesBucketName:
+    Condition: IsPrimary
+    Value: !Ref NestedTemplatesBucket
+  AppCiRoleArn:
+    Condition: IsPrimary
+    Description: Set as the AWS_ROLE_ARN variable in the app repository (GitHub Actions).
+    Value: !GetAtt AppCiRole.Arn
+  InfraCiRoleArn:
+    Condition: IsPrimary
+    Description: Set as the AWS_ROLE_ARN variable in the infra repository (GitHub Actions).
+    Value: !GetAtt InfraCiRole.Arn
