@@ -34,7 +34,7 @@ Parameters:
     Default: AWS-Onward-Delivery-Photos-Storage-Infra
   AppRepoName:
     Type: String
-    Default: onward-delivery-photos-app
+    Default: AWS-Onward-Delivery-Photos-Storage-App
     Description: Its GitHub Actions push images to ECR (main branch only).
   Branch:
     Type: String

@@ -1,7 +1,7 @@
 # AWS-Onward-Delivery-Photos-Storage-Infra
 
 AWS infrastructure for Onward Logistics' delivery photos, written in CloudFormation and deployed
-by CloudFormation Git sync. Owned by RUYANGA. The application lives in `onward-delivery-photos-app`.
+by CloudFormation Git sync. Owned by RUYANGA. The application lives in `AWS-Onward-Delivery-Photos-Storage-App`.
 
 ## Authorship: every commit and push belongs to RUYANGA
 

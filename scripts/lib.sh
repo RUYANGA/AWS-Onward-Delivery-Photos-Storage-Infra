@@ -9,7 +9,7 @@ PRIMARY_REGION="${PRIMARY_REGION:-eu-west-1}"
 DR_REGION="${DR_REGION:-eu-central-1}"
 GITHUB_OWNER="${GITHUB_OWNER:-RUYANGA}"
 REPO_NAME="${REPO_NAME:-AWS-Onward-Delivery-Photos-Storage-Infra}"
-APP_REPO_NAME="${APP_REPO_NAME:-onward-delivery-photos-app}"
+APP_REPO_NAME="${APP_REPO_NAME:-AWS-Onward-Delivery-Photos-Storage-App}"
 # GitHub's immutable OIDC subject pins numeric IDs; looked up with gh when not given.
 github_id() { gh api "$1" -q .id 2>/dev/null | grep -E '^[0-9]+$' || true; }  # empty if missing
 GITHUB_OWNER_ID="${GITHUB_OWNER_ID:-$(github_id "users/$GITHUB_OWNER")}"
