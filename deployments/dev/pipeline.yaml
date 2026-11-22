@@ -8,7 +8,7 @@ parameters:
   ReleaseImageTag: latest
   DeployBundleKey: deploy/deploy-bundle.zip
   DeploymentConfig: CodeDeployDefault.ECSAllAtOnce   # or ECSCanary10Percent5Minutes: 10% of traffic first
-  KeepOldVersionMinutes: "15"
+  KeepOldVersionMinutes: "5"
 tags:
   Project: onward-delivery-photos
   Environment: dev
