@@ -1,0 +1,10 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Empty placeholder for the Onward delivery photos stacks (onward-<env>-photos-dr,
+  onward-<env>-pipeline, onward-<env>-platform). CloudFormation Git sync only updates stacks
+  that already exist, so scripts/bootstrap.sh creates each stack from this template before
+  turning Git sync on. Git sync then replaces it with the template named in deployments/<env>/.
+
+Resources:
+  GitSyncPlaceholder:
+    Type: AWS::CloudFormation::WaitConditionHandle
