@@ -5,7 +5,10 @@ repository by **CloudFormation Git sync**. The application lives in its own repo
 [AWS-Onward-Delivery-Photos-Storage-App](https://github.com/RUYANGA/AWS-Onward-Delivery-Photos-Storage-App). Its GitHub Actions
 push each image to ECR, and **AWS CodePipeline** releases it to ECS with a **CodeDeploy blue/green** deployment.
 
-![Architecture](docs/architecture.svg)
+![Architecture](docs/architecture.png)
+
+The diagram is drawn in [docs/architecture.drawio](docs/architecture.drawio) (open it in draw.io to edit, then export
+`docs/architecture.png`).
 
 Decisions: [docs/decisions.md](docs/decisions.md). Recovery procedures: [docs/runbook.md](docs/runbook.md).
 
