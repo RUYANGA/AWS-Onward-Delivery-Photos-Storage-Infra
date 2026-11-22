@@ -1,0 +1,624 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Onward Logistics - delivery photos | Nested stack: NETWORK.
+  Three-tier VPC across two Availability Zones (public ALB, private app, isolated data),
+  security groups for every tier, the VPC endpoints that replace NAT gateways, and the
+  internet-facing Application Load Balancer with its blue/green target groups and the
+  AWS WAF origin lock that admits only Onward's CloudFront distribution.
+
+# -----------------------------------------------------------------------------
+# Inputs
+# -----------------------------------------------------------------------------
+Parameters:
+  ProjectName:
+    Type: String
+    Description: Short project prefix used in every resource name.
+  Environment:
+    Type: String
+    Description: Deployment environment (dev, staging or prod).
+  VpcCidr:
+    Type: String
+    Description: CIDR block of the VPC.
+  PublicSubnetACidr:
+    Type: String
+    Description: Public subnet in AZ A (ALB).
+  PublicSubnetBCidr:
+    Type: String
+    Description: Public subnet in AZ B (ALB).
+  AppSubnetACidr:
+    Type: String
+    Description: Private app subnet in AZ A (Fargate tasks, interface endpoints).
+  AppSubnetBCidr:
+    Type: String
+    Description: Private app subnet in AZ B (Fargate tasks, interface endpoints).
+  DataSubnetACidr:
+    Type: String
+    Description: Isolated data subnet in AZ A (RDS).
+  DataSubnetBCidr:
+    Type: String
+    Description: Isolated data subnet in AZ B (RDS).
+  CloudFrontOriginPrefixListId:
+    Type: String
+    Description: AWS managed prefix list com.amazonaws.global.cloudfront.origin-facing.
+  PhotoBucketName:
+    Type: String
+    Description: Photo bucket the app may read and write through the S3 gateway endpoint.
+  TestListenerPort:
+    Type: Number
+    Default: 8080
+    Description: CodeDeploy routes test traffic to the new version here before customers see it.
+
+Resources:
+  # ===========================================================================
+  # VPC and internet gateway
+  # ===========================================================================
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-vpc"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-igw"
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  # ===========================================================================
+  # Subnets: two AZs per tier
+  # ===========================================================================
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PublicSubnetACidr
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ""
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-public-a"
+        - Key: Tier
+          Value: public
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PublicSubnetBCidr
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs ""
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-public-b"
+        - Key: Tier
+          Value: public
+
+  AppSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref AppSubnetACidr
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ""
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-app-a"
+        - Key: Tier
+          Value: private-app
+
+  AppSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref AppSubnetBCidr
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs ""
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-app-b"
+        - Key: Tier
+          Value: private-app
+
+  DataSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref DataSubnetACidr
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ""
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-data-a"
+        - Key: Tier
+          Value: isolated-data
+
+  DataSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref DataSubnetBCidr
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs ""
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-data-b"
+        - Key: Tier
+          Value: isolated-data
+
+  # ===========================================================================
+  # Route tables
+  # ===========================================================================
+  # Public tier: default route to the internet gateway (ALB only).
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-public-rt"
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  # Private app tier: no default route. AWS APIs are reached through VPC endpoints only.
+  AppRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-app-rt"
+
+  AppSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref AppSubnetA
+      RouteTableId: !Ref AppRouteTable
+
+  AppSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref AppSubnetB
+      RouteTableId: !Ref AppRouteTable
+
+  # Isolated data tier: local routes only.
+  DataRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-data-rt"
+
+  DataSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DataSubnetA
+      RouteTableId: !Ref DataRouteTable
+
+  DataSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DataSubnetB
+      RouteTableId: !Ref DataRouteTable
+
+  # ===========================================================================
+  # Security groups
+  #   CloudFront -> ALB :80 -> App :8000 -> DB :5432
+  #                               App :443 -> VPC endpoints
+  # Cross-group rules are separate resources to avoid circular references.
+  # ===========================================================================
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB - HTTP from CloudFront origin-facing addresses only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourcePrefixListId: !Ref CloudFrontOriginPrefixListId
+          Description: CloudFront origin-facing prefix list
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-alb-sg"
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Fargate tasks - traffic from the ALB only
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-app-sg"
+
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Interface VPC endpoints - HTTPS from app tasks only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+          Description: App tasks
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-vpce-sg"
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS PostgreSQL - port 5432 from app tasks only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+          Description: App tasks
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-db-sg"
+
+  AlbEgressToApp:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref AlbSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8000
+      ToPort: 8000
+      DestinationSecurityGroupId: !Ref AppSecurityGroup
+      Description: Forward to app tasks
+
+  AppIngressFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref AppSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8000
+      ToPort: 8000
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+      Description: ALB
+
+  AppEgressHttps:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref AppSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: 0.0.0.0/0
+      Description: AWS APIs via VPC endpoints (the subnet has no internet route)
+
+  AppEgressDatabase:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref AppSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      DestinationSecurityGroupId: !Ref DatabaseSecurityGroup
+      Description: PostgreSQL
+
+  # ===========================================================================
+  # VPC endpoints (replace NAT gateways: no internet path from the app)
+  # ===========================================================================
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      VpcEndpointType: Gateway
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      RouteTableIds:
+        - !Ref AppRouteTable
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: OnwardPhotoBucket
+            Effect: Allow
+            Principal: "*"
+            Action:
+              - "s3:GetObject"
+              - "s3:PutObject"
+            Resource: !Sub "arn:${AWS::Partition}:s3:::${PhotoBucketName}/*"
+          - Sid: EcrImageLayers
+            Effect: Allow
+            Principal: "*"
+            Action:
+              - s3:GetObject
+            Resource: !Sub "arn:${AWS::Partition}:s3:::prod-${AWS::Region}-starport-layer-bucket/*"
+
+  EcrApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      VpcEndpointType: Interface
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.api"
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref AppSubnetA
+        - !Ref AppSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  EcrDkrEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      VpcEndpointType: Interface
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.dkr"
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref AppSubnetA
+        - !Ref AppSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  LogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      VpcEndpointType: Interface
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.logs"
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref AppSubnetA
+        - !Ref AppSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  # ECS reads the app's .env values from Parameter Store when a task starts.
+  SsmEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      VpcEndpointType: Interface
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssm"
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref AppSubnetA
+        - !Ref AppSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      VpcEndpointType: Interface
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.secretsmanager"
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref AppSubnetA
+        - !Ref AppSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  # ===========================================================================
+  # Application Load Balancer
+  # Two identical target groups. CodeDeploy alternates between them on every
+  # release: the live one is "blue", the one receiving the new version is "green".
+  # ===========================================================================
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-alb"
+      Type: application
+      Scheme: internet-facing
+      IpAddressType: ipv4
+      Subnets:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      LoadBalancerAttributes:
+        - Key: routing.http.drop_invalid_header_fields.enabled
+          Value: "true"
+        - Key: idle_timeout.timeout_seconds
+          Value: "60"
+
+  BlueTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-tg-blue"
+      VpcId: !Ref Vpc
+      TargetType: ip
+      Protocol: HTTP
+      Port: 8000
+      HealthCheckPath: /healthz
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: "200"
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+
+  GreenTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-tg-green"
+      VpcId: !Ref Vpc
+      TargetType: ip
+      Protocol: HTTP
+      Port: 8000
+      HealthCheckPath: /healthz
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: "200"
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+
+  # CloudFront uses port 80. CodeDeploy rewrites this listener's target group
+  # during a release; do not change it from CloudFormation afterwards.
+  ProductionListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref BlueTargetGroup
+
+  # Lets the new version be checked before customers see it. No security group
+  # rule opens this port, so it is not reachable from the internet.
+  TestListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTP
+      Port: !Ref TestListenerPort
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref BlueTargetGroup
+
+  # ===========================================================================
+  # Origin lock: CloudFront adds a secret header; AWS WAF blocks every request without it.
+  # (A listener rule cannot be used: CodeDeploy swaps only the default action.)
+  # ===========================================================================
+  OriginVerifySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${ProjectName}/${Environment}/cloudfront-origin-verify"
+      Description: Shared value CloudFront sends to the ALB so only Onward's distribution can reach it.
+      GenerateSecretString:
+        SecretStringTemplate: "{}"
+        GenerateStringKey: token
+        PasswordLength: 48
+        ExcludePunctuation: true
+
+  OriginLockWebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-alb-origin-lock"
+      Description: Only requests from the Onward CloudFront distribution reach the application.
+      Scope: REGIONAL
+      DefaultAction:
+        Block:
+          CustomResponse:
+            ResponseCode: 403
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "${ProjectName}-${Environment}-alb-origin-lock"
+      Rules:
+        - Name: allow-onward-cloudfront
+          Priority: 0
+          Action:
+            Allow: {}
+          Statement:
+            ByteMatchStatement:
+              FieldToMatch:
+                SingleHeader:
+                  Name: x-origin-verify
+              PositionalConstraint: EXACTLY
+              SearchString: !Sub "{{resolve:secretsmanager:${OriginVerifySecret}:SecretString:token}}"
+              TextTransformations:
+                - Priority: 0
+                  Type: NONE
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub "${ProjectName}-${Environment}-allow-onward-cloudfront"
+
+  OriginLockWebAclAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Ref LoadBalancer
+      WebACLArn: !GetAtt OriginLockWebAcl.Arn
+
+# -----------------------------------------------------------------------------
+# Outputs (consumed by the database, application and edge stacks)
+# Subnet lists are comma-separated so they bind to List<AWS::EC2::Subnet::Id>.
+# -----------------------------------------------------------------------------
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+  AppSubnetIds:
+    Value: !Join
+      - ","
+      -
+        - !Ref AppSubnetA
+        - !Ref AppSubnetB
+  DataSubnetIds:
+    Value: !Join
+      - ","
+      -
+        - !Ref DataSubnetA
+        - !Ref DataSubnetB
+  AppSecurityGroupId:
+    Value: !Ref AppSecurityGroup
+  DatabaseSecurityGroupId:
+    Value: !Ref DatabaseSecurityGroup
+  LoadBalancerDnsName:
+    Value: !GetAtt LoadBalancer.DNSName
+  LoadBalancerFullName:
+    Value: !GetAtt LoadBalancer.LoadBalancerFullName
+  OriginVerifySecretArn:
+    Value: !Ref OriginVerifySecret
+  BlueTargetGroupArn:
+    Value: !Ref BlueTargetGroup
+  BlueTargetGroupFullName:
+    Value: !GetAtt BlueTargetGroup.TargetGroupFullName
+  GreenTargetGroupFullName:
+    Value: !GetAtt GreenTargetGroup.TargetGroupFullName
+  # Exports imported by templates/pipeline.yaml (CodeDeploy deployment group)
+  ProductionListenerArn:
+    Value: !Ref ProductionListener
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-ProductionListenerArn"
+  TestListenerArn:
+    Value: !Ref TestListener
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-TestListenerArn"
+  BlueTargetGroupName:
+    Value: !GetAtt BlueTargetGroup.TargetGroupName
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-BlueTargetGroupName"
+  GreenTargetGroupName:
+    Value: !GetAtt GreenTargetGroup.TargetGroupName
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-GreenTargetGroupName"
