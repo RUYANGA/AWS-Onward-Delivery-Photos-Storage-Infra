@@ -424,8 +424,8 @@ Resources:
             "rules": [
               {
                 "rulePriority": 1,
-                "description": "Keep the 20 most recent images",
-                "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 20 },
+                "description": "Keep the 10 most recent releases (the versions you can roll back to)",
+                "selection": { "tagStatus": "tagged", "tagPatternList": ["*"], "countType": "imageCountMoreThan", "countNumber": 10 },
                 "action": { "type": "expire" }
               }
             ]
@@ -568,6 +568,12 @@ Resources:
             Action:
               - ecs:DescribeTaskDefinition
             Resource: "*"   # this action does not support resource-level permissions
+          - Sid: RollBackThroughReleasePipeline
+            Effect: Allow
+            Action:
+              - codepipeline:StartPipelineExecution
+              - codepipeline:ListPipelineExecutions
+            Resource: !Sub "arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${ProjectName}-${Environment}-photos-release"
 
   AppCiRole:
     Type: AWS::IAM::Role

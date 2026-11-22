@@ -246,6 +246,15 @@ Resources:
       Name: !Sub "${ProjectName}-${Environment}-photos-release"
       PipelineType: V2
       ExecutionMode: SUPERSEDED     # a newer release replaces one still waiting
+      # Shown on each run (Executions > run > Variables). A release from ECR keeps the defaults;
+      # a rollback sets the git SHA it redeploys and why.
+      Variables:
+        - Name: Version
+          DefaultValue: latest
+          Description: Git SHA of the release this run deploys (latest = the newest image)
+        - Name: Reason
+          DefaultValue: release
+          Description: Why this run was started (release, or the reason given for a rollback)
       RoleArn: !GetAtt PipelineRole.Arn
       ArtifactStore:
         Type: S3
