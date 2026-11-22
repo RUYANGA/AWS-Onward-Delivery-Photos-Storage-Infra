@@ -52,8 +52,13 @@ placeholder() {
     --template-file "$ROOT/templates/gitsync-placeholder.yaml" --no-fail-on-empty-changeset --tags "${TAGS[@]}"
 }
 
+is_placeholder() {  # is_placeholder <region> <stack>
+  aws cloudformation describe-stack-resource --region "$1" --stack-name "$2" \
+    --logical-resource-id GitSyncPlaceholder >/dev/null 2>&1
+}
+
 # wait_for_sync <region> <stack> <minutes>: the placeholder is CREATE_COMPLETE; Git sync's
-# real template arrives as an update.
+# real template arrives as an update. A stack already built by deploy-direct.sh is adopted as is.
 wait_for_sync() {
   local s
   say "Waiting for Git sync to build $2 in $1 (up to $3 minutes)"
@@ -62,6 +67,7 @@ wait_for_sync() {
     echo "$(date +%T) $s"
     case "$s" in
       UPDATE_COMPLETE) return 0 ;;
+      CREATE_COMPLETE) is_placeholder "$1" "$2" || return 0 ;;
       *ROLLBACK*|*FAILED) echo "See the stack events: aws cloudformation describe-stack-events --region $1 --stack-name $2"; return 1 ;;
     esac
     sleep 20
