@@ -4,7 +4,7 @@ template-file-path: templates/platform.yaml
 parameters:
   ProjectName: onward
   Environment: dev
-  NestedTemplatesVersion: "29af3616c8c2"   # ./scripts/nested-templates.sh version (CI fails if stale)
+  NestedTemplatesVersion: "8fb37e1af37f"   # ./scripts/nested-templates.sh version (CI fails if stale)
   DrRegion: eu-central-1
   CloudFrontOriginPrefixListId: pl-4fa04526   # com.amazonaws.global.cloudfront.origin-facing in eu-west-1; verify in your account
   EcrRepositoryName: onward-dev/delivery-photos-app
