@@ -291,6 +291,10 @@ Resources:
                 - Name: DeployBundle
               RunOrder: 1
         - Name: Deploy
+          # A failed release rolls this stage back to the last successful release (the same
+          # image digest and deploy bundle), which also shows as a "Rollback" run in the console.
+          OnFailure:
+            Result: ROLLBACK
           Actions:
             - Name: BlueGreen
               ActionTypeId:
