@@ -30,7 +30,10 @@ jobs:
   publish-nested-templates:
     name: publish nested templates
     needs: lint
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    # Skipped until the bootstrap has created the CI role (AWS_ROLE_ARN = output InfraCiRoleArn).
+    if: >-
+      vars.AWS_ROLE_ARN != '' &&
+      (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     permissions:
       contents: read
