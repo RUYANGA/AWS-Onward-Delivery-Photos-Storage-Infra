@@ -1,0 +1,178 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Onward Logistics - delivery photos | Nested stack: EDGE.
+  CloudFront distribution that is the only public entry point: pages go to the ALB,
+  /media/* is read from the private photo bucket through Origin Access Control.
+
+# -----------------------------------------------------------------------------
+# Inputs
+# -----------------------------------------------------------------------------
+Parameters:
+  ProjectName:
+    Type: String
+    Description: Short project prefix used in every resource name.
+  Environment:
+    Type: String
+    Description: Deployment environment (dev, staging or prod).
+  CloudFrontPriceClass:
+    Type: String
+    Description: Edge locations CloudFront serves from.
+  LoadBalancerDnsName:
+    Type: String
+    Description: ALB origin (from the network stack).
+  OriginVerifySecretArn:
+    Type: String
+    Description: Secret whose token CloudFront sends as X-Origin-Verify (from the network stack).
+  PhotoBucketName:
+    Type: String
+    Description: Photo bucket (computed in the root stack; the storage stack is created after this one).
+
+Resources:
+  # ===========================================================================
+  # Access to the private photo bucket (its bucket policy is in storage.yaml)
+  # ===========================================================================
+  PhotoOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${ProjectName}-${Environment}-photos-oac"
+        Description: Signs CloudFront requests to the private photo bucket
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # ===========================================================================
+  # Response header policies
+  # ===========================================================================
+  MediaResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${ProjectName}-${Environment}-media-headers"
+        Comment: Photos may only be embedded by Onward pages and are never indexed
+        SecurityHeadersConfig:
+          ContentTypeOptions:
+            Override: true
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: same-origin
+            Override: true
+        CustomHeadersConfig:
+          Items:
+            - Header: Cross-Origin-Resource-Policy
+              Value: same-origin
+              Override: true
+            - Header: X-Robots-Tag
+              Value: "noindex, noimageindex"
+              Override: true
+        RemoveHeadersConfig:
+          Items:
+            - Header: x-amz-server-side-encryption
+            - Header: x-amz-version-id
+            - Header: x-amz-storage-class
+
+  AppResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${ProjectName}-${Environment}-app-headers"
+        Comment: Security headers for application pages
+        SecurityHeadersConfig:
+          ContentTypeOptions:
+            Override: true
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+
+  # ===========================================================================
+  # Distribution
+  # ===========================================================================
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "${ProjectName}-${Environment} delivery photos"
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: !Ref CloudFrontPriceClass
+        Origins:
+          - Id: app-alb
+            DomainName: !Ref LoadBalancerDnsName
+            CustomOriginConfig:
+              OriginProtocolPolicy: http-only
+              HTTPPort: 80
+              OriginReadTimeout: 30
+              OriginKeepaliveTimeout: 5
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Sub "{{resolve:secretsmanager:${OriginVerifySecretArn}:SecretString:token}}"
+          - Id: photos-s3
+            DomainName: !Sub "${PhotoBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}"
+            OriginAccessControlId: !GetAtt PhotoOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: app-alb
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - POST
+            - PATCH
+            - DELETE
+          CachedMethods:
+            - GET
+            - HEAD
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad          # Managed-CachingDisabled
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac  # Managed-AllViewerExceptHostHeader
+          ResponseHeadersPolicyId: !Ref AppResponseHeadersPolicy
+          Compress: true
+        CacheBehaviors:
+          - PathPattern: /media/*
+            TargetOriginId: photos-s3
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+            CachedMethods:
+              - GET
+              - HEAD
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6        # Managed-CachingOptimized
+            ResponseHeadersPolicyId: !Ref MediaResponseHeadersPolicy
+            Compress: false                                            # JPEG/WebP are already compressed
+          - PathPattern: /static/*
+            TargetOriginId: app-alb
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+            CachedMethods:
+              - GET
+              - HEAD
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6        # Managed-CachingOptimized
+            ResponseHeadersPolicyId: !Ref AppResponseHeadersPolicy
+            Compress: true
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+# -----------------------------------------------------------------------------
+# Outputs (surfaced by the root stack)
+# -----------------------------------------------------------------------------
+Outputs:
+  DistributionId:
+    Value: !Ref Distribution
+  DistributionDomainName:
+    Value: !GetAtt Distribution.DomainName
