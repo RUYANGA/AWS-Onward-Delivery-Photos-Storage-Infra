@@ -22,7 +22,7 @@ Decisions: [docs/decisions.md](docs/decisions.md). Recovery procedures: [docs/ru
 | `onward-dev-pipeline` | eu-west-1 | `templates/pipeline.yaml` | CodeDeploy app + deployment group, CodePipeline, EventBridge rule |
 
 - **Photos:** private S3 bucket with versioning, Block Public Access and Cross-Region Replication to a Glacier Instant Retrieval replica. Bucket policies deny permanent version deletes and bucket deletion.
-- **Details:** Multi-AZ RDS for PostgreSQL 16 in isolated subnets. RDS generates and rotates the password in Secrets Manager.
+- **Details:** Multi-AZ RDS for PostgreSQL 16 in isolated subnets. RDS generates and rotates the password in Secrets Manager. Automated backups give 7 days of point-in-time restore; an AWS Backup plan also takes a daily backup, keeps it 35 days and copies it to a vault in eu-central-1.
 - **Configuration:** the app's `.env` values live in SSM Parameter Store under `/onward/dev/app/` (one parameter per variable); ECS injects them, and the database credentials, when a task starts.
 - **App:** ECS Fargate (2 to 6 tasks across 2 AZs) in private subnets with no internet route. AWS APIs are reached through VPC endpoints.
 - **Entry point:** CloudFront is the only public URL. `/media/*` is served from S3 through Origin Access Control. The internet-facing ALB accepts only CloudFront's prefix list, and AWS WAF blocks any request without CloudFront's secret origin header.
@@ -177,6 +177,8 @@ To show a release, change the app, merge to `main`, and watch CodeDeploy shift t
 
 `./scripts/teardown.sh` stops Git sync and deletes the pipeline, platform and replica stacks
 (set `DbDeletionProtection: "false"` and merge first; RDS takes a final snapshot). The photo
-buckets, replica, ECR repository, template and deploy-bundle buckets are retained on purpose (evidence and
-release history). To remove a bucket, an account administrator deletes its policy, empties all
-versions and then deletes it. Rebuild with `./scripts/bootstrap.sh sync`.
+buckets, replica, database backup vaults (both Regions), ECR repository, template and deploy-bundle buckets are
+retained on purpose (evidence and release history). To remove a bucket, an account administrator deletes its policy, empties all
+versions and then deletes it. A backup vault is removed the same way: delete its recovery points, then the
+vault. The stacks create these names again, so remove the retained vaults before a rebuild. Rebuild with
+`./scripts/bootstrap.sh sync`.

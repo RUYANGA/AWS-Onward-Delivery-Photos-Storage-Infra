@@ -1,7 +1,8 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Onward Logistics - delivery photos. Recovery Region stack: the replica bucket that receives
-  every photo, thumbnail and metadata sidecar through S3 Cross-Region Replication.
+  every photo, thumbnail and metadata sidecar through S3 Cross-Region Replication, and the
+  backup vault that receives a copy of each daily database backup.
   Deploy this stack before the platform stack; replication requires the destination to exist.
 
 Parameters:
@@ -94,6 +95,15 @@ Resources:
               - s3:DeleteBucket
             Resource: !GetAtt ReplicaBucket.Arn
 
+  # Receives the daily database backup copies from the platform stack's backup plan, which
+  # builds this name itself. Retained: it holds recovery points.
+  DbBackupVault:
+    Type: AWS::Backup::BackupVault
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BackupVaultName: !Sub "${ProjectName}-${Environment}-db-backups-${AWS::Region}"
+
 Outputs:
   ReplicaBucketName:
     Value: !Ref ReplicaBucket
@@ -101,3 +111,5 @@ Outputs:
       Name: !Sub "${AWS::StackName}-ReplicaBucketName"
   ReplicaBucketArn:
     Value: !GetAtt ReplicaBucket.Arn
+  DbBackupVaultName:
+    Value: !Ref DbBackupVault

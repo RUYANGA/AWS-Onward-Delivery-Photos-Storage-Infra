@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Delete the environment after a demo; rebuild later with ./scripts/bootstrap.sh sync.
-# Photo buckets, the replica, the ECR repository and the template/deploy-bundle buckets are retained on
-# purpose (evidence and release history); RDS takes a final snapshot.
+# Photo buckets, the replica, the database backup vaults, the ECR repository and the template/deploy-bundle
+# buckets are retained on purpose (evidence and release history); RDS takes a final snapshot.
 source "$(dirname "$0")/lib.sh"
 read -r -p "Delete $PIPELINE_STACK, $PLATFORM_STACK and $DR_STACK? Type the environment name to confirm: " ok
 [[ "$ok" == "$ENVIRONMENT" ]] || { echo "Cancelled."; exit 1; }

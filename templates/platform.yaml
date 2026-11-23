@@ -106,6 +106,11 @@ Parameters:
     Default: 7
     MinValue: 1
     MaxValue: 35
+  DbBackupPlanRetentionDays:
+    Type: Number
+    Default: 35
+    MinValue: 7
+    Description: Days the daily AWS Backup recovery points are kept, here and in DrRegion.
   DbDeletionProtection:
     Type: String
     AllowedValues:
@@ -209,6 +214,8 @@ Resources:
         DbEngineVersion: !Ref DbEngineVersion
         DbAllocatedStorage: !Ref DbAllocatedStorage
         DbBackupRetentionDays: !Ref DbBackupRetentionDays
+        DbBackupPlanRetentionDays: !Ref DbBackupPlanRetentionDays
+        DrRegion: !Ref DrRegion
         DbDeletionProtection: !Ref DbDeletionProtection
 
   EdgeStack:
@@ -292,6 +299,8 @@ Outputs:
     Value: !GetAtt DatabaseStack.Outputs.DatabaseEndpointAddress
   DatabaseSecretArn:
     Value: !GetAtt DatabaseStack.Outputs.DatabaseSecretArn
+  DatabaseBackupVaultName:
+    Value: !GetAtt DatabaseStack.Outputs.BackupVaultName
   ClusterName:
     Value: !GetAtt ApplicationStack.Outputs.ClusterName
   ServiceName:
