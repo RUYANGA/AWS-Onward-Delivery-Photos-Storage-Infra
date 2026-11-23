@@ -49,6 +49,7 @@ damage to customer trust.
 - AWS, Replicating objects within and across Regions: https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication.html
 - AWS, Restricting access to an Amazon S3 origin (Origin Access Control): https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html
 - AWS Well-Architected Framework, Reliability Pillar: https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html
+- AWS Pricing Calculator, cost estimate for this design: https://calculator.aws/#/estimate?id=b6617eb4f66753a080f5b30314c770496b8a8af2
 
 ## 2. The business value of my solution
 
@@ -76,6 +77,36 @@ photos grows, and the application only handles uploads and pages, so it stays fa
 | VPC with private subnets and VPC endpoints | Keeps the app and database off the internet. | The database is unreachable from outside, and the app reaches AWS services privately. |
 | AWS CloudFormation (Git sync) | Builds and changes all of the above from the repository. | Every change is a reviewed pull request, and the whole system can be rebuilt from Git. |
 | GitHub Actions, Amazon ECR, CodePipeline, CodeDeploy | Test, scan and release new app versions blue/green. | Customers never see a half-released version, and a bad release rolls back by itself. |
+
+### Estimated cost
+
+Full estimate in the AWS Pricing Calculator:
+[calculator.aws estimate](https://calculator.aws/#/estimate?id=b6617eb4f66753a080f5b30314c770496b8a8af2)
+
+**About USD 217 a month (about USD 2,600 a year)**, on-demand prices, without free tiers.
+Assumptions: about 30,000 photos a month at about 3 MB each, storage taken at month 12
+(about 1.1 TB), and about 100 GB a month delivered to viewers.
+
+| Service | Region | USD a month |
+|---|---|---|
+| VPC interface endpoints (5 in 2 AZs) and 2 public IPv4 addresses | Ireland | 87.80 |
+| ECS on Fargate (2 tasks, 0.5 vCPU / 1 GB) | Ireland | 36.04 |
+| RDS for PostgreSQL (db.t4g.micro Multi-AZ, 20 GB gp3) | Ireland | 30.63 |
+| Application Load Balancer | Ireland | 18.63 |
+| CloudFront | Global | 11.74 |
+| S3 photo bucket (Intelligent-Tiering, 1.1 TB) | Ireland | 11.42 |
+| S3 replica (Glacier Instant Retrieval) | Frankfurt | 7.75 |
+| AWS WAF | Ireland | 6.30 |
+| CloudWatch (logs and alarms) | Ireland | 3.37 |
+| Secrets Manager, CodePipeline, ECR | Ireland | 1.45 |
+| **Calculator total** | | **215.13** |
+| Replication transfer Ireland to Frankfurt (90 GB, not in the calculator) | | 1.80 |
+| **Total** | | **216.93** |
+
+Storing a photo in both Regions costs about USD 0.0006 a month, so growth in photos adds little.
+Most of the bill is always-on infrastructure; the largest line, the VPC endpoints, is the price
+of running the app with no route to the internet. CloudFront's free tier would remove about
+USD 12, and a Savings Plan or a Reserved Instance would cut Fargate and RDS further.
 
 ### Who benefits, and how I will know
 
