@@ -249,10 +249,21 @@ Resources:
               - codepipeline:*
               - codedeploy:*
               - wafv2:*
+              - backup:*
+              - backup-storage:MountCapsule
               - ecr:DescribeRepositories
               - kms:DescribeKey
               - kms:CreateGrant
               - kms:ListAliases
+            Resource: "*"
+          # A new backup vault is encrypted with the AWS managed aws/backup key; that key's
+          # policy only allows these calls through AWS Backup in this account.
+          - Sid: BackupVaultEncryption
+            Effect: Allow
+            Action:
+              - kms:GenerateDataKey
+              - kms:Decrypt
+              - kms:RetireGrant
             Resource: "*"
           - Sid: ReleaseTriggerRule
             Effect: Allow

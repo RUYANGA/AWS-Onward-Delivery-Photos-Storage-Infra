@@ -73,6 +73,7 @@ photos grows, and the application only handles uploads and pages, so it stays fa
 | AWS WAF + Application Load Balancer | Passes page requests to the app, only when they come from Onward's CloudFront. | Nobody can bypass CloudFront to reach the app directly; the ALB also spreads traffic across two data centres. |
 | Amazon ECS on Fargate | Runs the Django app (2 to 6 containers in two Availability Zones). | No servers to patch; a failed container is replaced automatically and capacity grows with demand. |
 | Amazon RDS for PostgreSQL (Multi-AZ) | Holds the photo catalogue: reference, rider, merchant, city, file location, checksum. | Managed backups and point-in-time restore; a standby in a second zone takes over if the first fails. |
+| AWS Backup | Backs up the database every day, keeps it 35 days and copies it to Frankfurt. | The catalogue survives the loss of the main Region and can be restored further back than the 7-day point-in-time window. |
 | AWS Secrets Manager and SSM Parameter Store | Hold the database password and the app settings. | No credentials in the code, image or repository; RDS rotates the password itself. |
 | VPC with private subnets and VPC endpoints | Keeps the app and database off the internet. | The database is unreachable from outside, and the app reaches AWS services privately. |
 | AWS CloudFormation (Git sync) | Builds and changes all of the above from the repository. | Every change is a reviewed pull request, and the whole system can be rebuilt from Git. |
@@ -122,9 +123,10 @@ USD 12, and a Savings Plan or a Reserved Instance would cut Fargate and RDS furt
 
 ### Limits and risks of my design
 
-- **Only the photos are copied to the second Region.** The app, database and CloudFront setup are
-  rebuilt from the repositories after a Region failure, which takes time. The catalogue can be
-  rebuilt from the details files, but edits made after upload may be lost.
+- **The running system is not copied to the second Region.** Photos are replicated within minutes
+  and the database is backed up daily to Frankfurt, but the app, load balancer and CloudFront
+  setup are rebuilt from the repositories after a Region failure, which takes time. Up to a day of
+  database changes could be lost; the catalogue can be completed from the details files.
 - **Replication is not instant.** Photos uploaded in the last few minutes before an outage may not
   be in the replica yet. S3 Replication Time Control would cap this at 15 minutes for extra cost.
 - **Old versions expire.** Overwritten or deleted versions are kept for a set number of days, not

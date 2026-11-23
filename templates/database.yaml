@@ -3,6 +3,7 @@ Description: >-
   Onward Logistics - delivery photos | Nested stack: DATABASE.
   Multi-AZ RDS for PostgreSQL in the isolated data subnets. RDS generates, stores and
   rotates the master password in Secrets Manager; no credential appears in this repository.
+  AWS Backup takes a daily backup and copies it to the recovery Region.
 
 # -----------------------------------------------------------------------------
 # Inputs
@@ -31,7 +32,13 @@ Parameters:
     Description: Initial storage in GiB (grows automatically up to 100 GiB).
   DbBackupRetentionDays:
     Type: Number
-    Description: Days automated backups are kept.
+    Description: Days automated backups are kept (point-in-time restore window).
+  DbBackupPlanRetentionDays:
+    Type: Number
+    Description: Days the daily AWS Backup recovery points are kept, in both Regions.
+  DrRegion:
+    Type: String
+    Description: Recovery Region; its vault is created by the <project>-<env>-photos-dr stack.
   DbDeletionProtection:
     Type: String
     AllowedValues:
@@ -90,6 +97,72 @@ Resources:
         - Key: Name
           Value: !Sub "${ProjectName}-${Environment}-photos-db"
 
+  # ===========================================================================
+  # Daily AWS Backup with a copy in the recovery Region
+  # ===========================================================================
+  # The automated backups above give point-in-time restore for 7 days in this Region only.
+  # This plan keeps daily recovery points longer and copies each one to the recovery Region,
+  # so the catalogue survives the loss of eu-west-1. Vaults are retained: they hold evidence.
+  BackupVault:
+    Type: AWS::Backup::BackupVault
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BackupVaultName: !Sub "${ProjectName}-${Environment}-db-backups-${AWS::Region}"
+
+  BackupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-db-backup-${AWS::Region}"
+      Description: Lets AWS Backup back up and restore the photo catalogue database.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: backup.amazonaws.com
+            Action:
+              - sts:AssumeRole
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup"
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores"
+
+  BackupPlan:
+    Type: AWS::Backup::BackupPlan
+    Properties:
+      BackupPlan:
+        BackupPlanName: !Sub "${ProjectName}-${Environment}-db-daily"
+        BackupPlanRule:
+          - RuleName: daily-with-copy-to-dr
+            TargetBackupVault: !Ref BackupVault
+            # 05:00 UTC: clear of the RDS backup window (01:00-02:00) and the Sunday
+            # maintenance window (02:30-03:30); AWS Backup skips jobs that overlap them.
+            ScheduleExpression: cron(0 5 * * ? *)
+            StartWindowMinutes: 60
+            CompletionWindowMinutes: 180
+            Lifecycle:
+              DeleteAfterDays: !Ref DbBackupPlanRetentionDays
+            CopyActions:
+              - DestinationBackupVaultArn: !Sub "arn:${AWS::Partition}:backup:${DrRegion}:${AWS::AccountId}:backup-vault:${ProjectName}-${Environment}-db-backups-${DrRegion}"
+                Lifecycle:
+                  DeleteAfterDays: !Ref DbBackupPlanRetentionDays
+            RecoveryPointTags:
+              Project: !Ref ProjectName
+              Environment: !Ref Environment
+
+  BackupSelection:
+    Type: AWS::Backup::BackupSelection
+    Properties:
+      BackupPlanId: !Ref BackupPlan
+      BackupSelection:
+        SelectionName: photos-db
+        IamRoleArn: !GetAtt BackupRole.Arn
+        Resources:
+          - !Sub "arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:db:${Database}"
+
 # -----------------------------------------------------------------------------
 # Outputs (consumed by the application stack)
 # -----------------------------------------------------------------------------
@@ -104,3 +177,8 @@ Outputs:
   DatabaseSecretArn:
     Description: RDS-managed secret holding the master username and password.
     Value: !GetAtt Database.MasterUserSecret.SecretArn
+  BackupVaultName:
+    Description: Vault holding the daily recovery points in this Region.
+    Value: !Ref BackupVault
+  BackupPlanId:
+    Value: !Ref BackupPlan
