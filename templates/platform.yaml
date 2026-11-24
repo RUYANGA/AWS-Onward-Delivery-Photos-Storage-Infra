@@ -159,6 +159,12 @@ Parameters:
   LabName:
     Type: String
     Default: "Storing and Serving Delivery Photos for Onward Logistics"
+  AdminEmail:
+    Type: String
+    Description: Sign-in email of the app's administrator (manage photos; everyone else views only).
+  AdminName:
+    Type: String
+    Description: Administrator's full name, shown in the app and recorded in the change history.
   LogRetentionDays:
     Type: Number
     Default: 30
@@ -277,6 +283,8 @@ Resources:
         MaxUploadMb: !Ref MaxUploadMb
         StudentFullName: !Ref StudentFullName
         LabName: !Ref LabName
+        AdminEmail: !Ref AdminEmail
+        AdminName: !Ref AdminName
 
 # =============================================================================
 # Outputs (unchanged names: scripts/live-review-checks.sh reads these)
