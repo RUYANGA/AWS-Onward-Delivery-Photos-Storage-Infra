@@ -185,9 +185,6 @@ Resources:
 
   # ===========================================================================
   # Configuration (.env) in SSM Parameter Store
-  # One String parameter per variable under /<project>/<env>/app/. ECS reads them when a
-  # task starts, so changing a value needs no new task definition. DB_USERNAME and
-  # DB_PASSWORD stay in the RDS-managed secret in Secrets Manager, which rotates them.
   # ===========================================================================
   AppConfigAwsRegion:
     Type: AWS::SSM::Parameter
